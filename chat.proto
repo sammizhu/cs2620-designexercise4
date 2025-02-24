@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+service Chat {
+    // Simple RPCs where client sends a request to the server
+    // using stub and waits for a response to come back
+
+    rpc SendMessage(GeneralMessage) returns (Response) {}
+
+    rpc SendUsername(Username) returns (Response) {}
+
+    rpc SendPassword(Password) returns (Response) {}
+}
+
+// Client sending to server
+
+message GeneralMessage {
+    string command = 1;
+    string message = 2;
+}
+
+message Username {
+    string command = 1;
+    string username = 2;
+}
+
+message Password {
+    string command = 1;
+    string password = 2;
+}
+
+message Choice {
+    string choice = 1;
+}
+
+message Sender {
+    string sender = 1;
+}
+
+message Data {
+    string data = 1;
+}
+
+// Response message from the server
+
+message Response {
+    string command = 1;
+    string server_message = 2;
+}
+
+// Server to clients
+
+message CheckMessagesRequest {
+    string username = 1;
+    string choice = 2;
+    string sender = 3;
+}
+
+message CheckMessagesResponse {
+    string command = 1;
+    string server_message = 2;
+    string sender = 3;
+    string message_body = 4;
+    repeated string messages = 5;
+}
