@@ -1,113 +1,109 @@
 syntax = "proto3";
 
+package chat;
+
+// The Chat service definition
 service Chat {
-    // Simple RPCs where client sends a request to the server
-    // using stub and waits for a response to come back
+    // Register with (username, password, confirm_password)
+    rpc Register (RegisterRequest) returns (Response);
 
-    rpc SendMessage(GeneralMessage) returns (Response) {}
+    // Login with (username, password)
+    rpc Login (LoginRequest) returns (Response);
 
-    rpc SendUsername(Username) returns (Response) {}
+    // Send a direct message from one user to another
+    rpc SendMessage (SendMessageRequest) returns (SendMessageResponse);
 
-    rpc SendPassword(Password) returns (Response) {}
+    // Check messages (server-streaming):
+    // The server can yield multiple CheckMessagesResponse messages
+    rpc CheckMessages (CheckMessagesRequest) returns (stream CheckMessagesResponse);
 
-    rpc CheckMessages(CheckMessagesRequest) returns (CheckMessagesResponse) {}
+    // Log off a user
+    rpc Logoff (LogoffRequest) returns (Response);
 
-    rpc Logoff(LogoffRequest) returns (Response);
-    
-    rpc SearchUsers(SearchRequest) returns (SearchResponse);
-    
-    rpc DeleteLastMessage(DeleteRequest) returns (Response);
-    
-    rpc DeactivateAccount(DeactivateRequest) returns (Response);
+    // Search for users
+    rpc SearchUsers (SearchRequest) returns (SearchResponse);
+
+    // Delete last unread message the user has sent
+    rpc DeleteLastMessage (DeleteRequest) returns (Response);
+
+    // Deactivate an account
+    rpc DeactivateAccount (DeactivateRequest) returns (Response);
 }
 
-// Client sending to server
+/* ===========
+   Message Types
+   =========== */
 
-message GeneralMessage {
-    string command = 1;
-    string message = 2;
+// Registration
+message RegisterRequest {
+    string username = 1;
+    string password = 2;
+    string confirm_password = 3;
 }
 
-message Username {
-    string command = 1;
-    string username = 2;
-}
-
-message Password {
-    string command = 1;
+// Login
+message LoginRequest {
+    string username = 1;
     string password = 2;
 }
 
-message Choice {
-    string choice = 1;
-}
-
-message Sender {
-    string sender = 1;
-}
-
-message Data {
-    string data = 1;
-}
-
-// Response message from the server
-
-message Response {
-    string command = 1;
-    string server_message = 2;
-}
-
-// Sending and Recieving Messages
-
+// Send a DM
 message SendMessageRequest {
-  string sender = 1;
-  string recipient = 2;
-  string message_body = 3;
+    string sender = 1;
+    string recipient = 2;
+    string message_body = 3;
 }
 
 message SendMessageResponse {
-  bool success = 1;
-  string server_message = 2;
+    bool success = 1;
+    string server_message = 2;
 }
 
+// Check messages (server-streaming)
 message CheckMessagesRequest {
-  string username = 1;
-  string choice = 2;
-  string sender = 3;
+    string username = 1;
+    string choice = 2;  // e.g., "1" to read, "2" to skip
+    string sender = 3;  // which sender we want to read from
 }
 
 message CheckMessagesResponse {
-    string command = 1;
-    string server_message = 2;
-    string sender = 3;
-    string message_body = 4;
-    repeated string messages = 5;
+    string command = 1;         // optional (e.g. "checkmessages")
+    string server_message = 2;  // e.g. "You have N unread messages"
+    string sender = 3;          // who sent the message
+    string message_body = 4;    // actual text
+    repeated string messages = 5; // optional array if you want to return multiple lines at once
 }
 
 // Logoff
 message LogoffRequest {
-  string username = 1;
+    string username = 1;
 }
 
 // Search
 message SearchRequest {
-  string username = 1;
+    string username = 1;
 }
 
 message SearchResponse {
-  bool success = 1;
-  repeated string usernames = 2;
-  string server_message = 3;
+    bool success = 1;
+    repeated string usernames = 2;
+    string server_message = 3;
 }
 
-// Delete
+// Delete last unread
 message DeleteRequest {
-  string username = 1;
-  string confirmation = 2; // e.g. "yes"/"no"
+    string username = 1;
+    string confirmation = 2; // "yes"/"no"
 }
 
-//Deactivate 
+// Deactivate
 message DeactivateRequest {
-  string username = 1;
-  string confirmation = 2; // e.g. "yes"/"no"
+    string username = 1;
+    string confirmation = 2; // "yes"/"no"
+}
+
+// Generic response for some calls
+message Response {
+    string command = 1;
+    string server_message = 2;
 }

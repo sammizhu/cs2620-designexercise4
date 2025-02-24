@@ -47,28 +47,22 @@ If the output shows `*:mysql (LISTEN)`, MySQL is now accepting remote connection
 **Optional:** If MySQL is still not accessible remotely, open port 3306 and run `sudo pfctl -f /etc/pf.conf -e`
 
 #### Test Remote MySQL Connection
-Run `mysql -h 10.250.185.35 -u root -p` and if successful, your MySQL now allows remote access!
+Run `ipconfig getifaddr en0` to get your laptop's IP address. Then run `mysql -h {your_ip_address} -u root -p` and if successful, your MySQL now allows remote access!
     
 ## Server Setup
-### Requirements
-Ensure you have the following installed:
-- Python 3.x
-- Required Python libraries:
-  ```sh
-  pip install -r requirements.txt
-  ```
-- MySQL Database set up with a database named `db262`, and a `users` and `messages` table. First run, `mysql -u root -p db262 < db262.sql`
-  to import the sql file. Then run `mysql -u root -p` to enter the sql terminal. Once in, run `USE db262` and then you can use regular sql commands to check your database. 
-
 ### Running the Server
 There are two servers. One running with JSON and the other via a custom wire protocol. 
 -  To run the JSON version, run 
    ```sh
-   python serverJson.py --host 10.250.185.35 --port 50000
+   python serverJson.py --host 10.250.213.39 --port 50000
      ```
 -  To run the custom wire protocol version, run 
    ```sh
-   python serverCustom.py --host 10.250.185.35 --port 50000
+   python serverCustom.py --host 10.250.213.39 --port 50000
+   ```
+-  To run the RPC version, run 
+   ```sh
+   python serverRPC.py --host 10.250.213.39 --port 50000
    ```
 
 ### Running the Client
@@ -77,11 +71,15 @@ There are two clients. One running with JSON and the other via a custom wire pro
 Howver, if you run a JSON server, you must run a JSON client, vice versa.  
 -  To run the JSON version, run 
    ```sh
-   python clientJSON.py --host 10.250.185.35 --port 50000
+   python clientJSON.py --host 10.250.213.39 --port 50000
      ```
 -  To run the custom wire protocol version, run 
    ```sh
-   python clientCustom.py --host 10.250.185.35 --port 50000
+   python clientCustom.py --host 10.250.213.39 --port 50000
+   ```
+-  To run the RPC version, run 
+   ```sh
+   python clientRPC.py --host 10.250.213.39 --port 50000
    ```
 3. A GUI window should appear for login, registration, and messaging.
 
