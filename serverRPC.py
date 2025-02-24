@@ -148,10 +148,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 db.commit()
         return chat_pb2.Response(command="2", server_message="Incorrect password. Try again.\n")
     
-    # Checks if 'username' has unread messages.
-    # If so, we ask them whether they'd like to read or send new messages.
-    # If they choose read => ask from which sender, then fetch those messages, mark them read.
-    # If they choose send => they can just type '@username message'.
     def CheckMessagesServerSide(self, request_iterator, context):
         username = None
         choice = None
@@ -234,228 +230,319 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                                 cur.execute(query, batch_ids)
                             db.commit()
 
-                            yield chat_pb2.ChecMessagesResponse(command="checkmessage", server_message="The current batch of messages has been marked as read.\n")
+                            yield chat_pb2.CheckMessagesResponse(command="checkmessage", server_message="The current batch of messages has been marked as read.\n")
 
                             # If there are more messages, wait for the user input before showing the next batch.
                             if i + batch_size < len(unread_msgs):
-                                yield chat_pb2.ChecMessagesResponse(command="checkmessage", server_message="Type anything to see the next batch of messages...\n")
+                                yield chat_pb2.CheckMessagesResponse(command="checkmessage", server_message="Type anything to see the next batch of messages...\n")
                     
                     elif choice == "2":
                         # Skips reading, user can continue
                         return
                     
                     else:
-                        yield chat_pb2.ChecMessagesResponse(command="checkmessage", server_message="Invalid choice. Returning to main.\n")
+                        yield chat_pb2.CheckMessagesResponse(command="checkmessage", server_message="Invalid choice. Returning to main.\n")
 
-def handle_client(conn, addr):
-    user_id = addr[1]
-    clients[user_id] = conn
-    print(f"New connection from {addr}")
+    def SendMessage(self, request, context):
+        """Send a message from one user to another."""          
+        sender = request.sender
+        recipient = request.recipient
+        message_body = request.message_body
 
-    logged_in = False
-    username = None
-
-    try:
-        while True:
-            data_jsonstr = conn.recv(1024).decode('utf-8')
-            data = json.loads(data_jsonstr)["command"] ### FIX ###
-            if not data:
-                # client disconnected
-                print(f"Client {addr} disconnected.")
-                break
-
-            # If not logged in => only handle register or login
-            if not logged_in:
-                if data == "1":
-                    new_user = handle_registration(conn, user_id)
-                    if new_user:
-                        username = new_user
-                        logged_in = True
-                        # Check unread (should be none if newly registered, but included for consistency)
-                        check_messages_server_side(conn, username)
-                        json_handleclient_registercommands = {"command": "handleclient",
-                                                              "server_message": "To send messages, use '@username message'. You can also type 'check', 'logoff',' search', 'delete', or 'deactivate'.\n "}
-                        conn.sendall(json.dumps(json_handleclient_registercommands).encode('utf-8'))
-                elif data == "2":
-                    logged_user = handle_login(conn, user_id)
-                    if logged_user:
-                        username = logged_user
-                        logged_in = True
-                        # Check unread for returning user
-                        check_messages_server_side(conn, username)
-                        json_handleclient_logincommands = {"command": "handleclient",
-                                                           "server_message": "To send messages, use '@username message'. You can also type 'check', 'logoff',' search', 'delete', or 'deactivate'.\n "}
-                        conn.sendall(json.dumps(json_handleclient_logincommands).encode('utf-8'))
-
-            # If logged in => handle DM sending, check, or logoff
-            else:
-                if data.lower() == "logoff":
-                    # Mark user inactive
-                    with connectsql() as db:
-                        with db.cursor() as cur:
-                            cur.execute("UPDATE users SET active=0 WHERE username=%s", (username,))
-                        db.commit()
-                    json_handleclient_logoff = {"command": "logoff",
-                                                "server_message": "Logged off.\n"}
-                    conn.sendall(json.dumps(json_handleclient_logoff).encode('utf-8'))
-                    break
-
-                elif data.lower() == "check":
-                    check_messages_server_side(conn, username)
-
-                elif data.startswith("@"):
-                    # Parse DM
-                    parts = data.split(" ", 1)
-                    if len(parts) < 2:
-                        json_handleclient_invalidsend = {"command": "sendmessage",
-                                                         "server_message": "Invalid format. Use '@username message'.\n"}
-                        conn.sendall(json.dumps(json_handleclient_invalidsend).encode('utf-8'))
-                        continue
-                    target_username, message = parts[0][1:], parts[1]
-                    try:
-                        with connectsql() as db:
-                            with db.cursor() as cur:
-                                cur.execute("INSERT INTO messages (receiver, sender, message, isread) VALUES (%s, %s, %s, 0)", (target_username, username, message))
-                                db.commit()
-
-                                # If target online, send message; otherwise just keep it stored in messages table
-                                cur.execute("SELECT socket_id, active FROM users WHERE username=%s", (target_username,))
-                                row = cur.fetchone()
-                                if row and row['socket_id'] and row['socket_id'].isdigit() and row['active']:
-                                    tsid = int(row['socket_id'])
-                                    if tsid in clients:
-                                        cur.execute("SELECT messageid FROM messages WHERE message=%s", (message))
-                                        msg_id = cur.fetchall()
-                                        msg_ids = tuple([m['messageid'] for m in msg_id])
-                                        query = "UPDATE messages SET isread=1 WHERE messageid=%s"
-                                        cur.execute(query, (msg_ids[0],))
-                                        db.commit()
-                                        json_handleclient_messagesend = {"command": "sendmessage",
-                                                                         "messagetext": f"{username}: {message}\n",
-                                                                         "username": username,
-                                                                         "message": message}
-                                        clients[tsid].sendall(json.dumps(json_handleclient_messagesend).encode('utf-8'))
-                    except Exception:
-                        traceback.print_exc()
-                        json_handleclient_errorsend = {"command": "sendmessage",
-                                                       "server_message": "Error storing/sending message.\n"}
-                        conn.sendall(json.dumps(json_handleclient_errorsend).encode('utf-8'))
-
-                elif data.lower() == "search":
-                    # List all users in the users table
-                    try:
-                        with connectsql() as db:
-                            with db.cursor() as cur:
-                                cur.execute("SELECT username FROM users")
-                                rows = cur.fetchall()
-                        if len(rows) > 0:
-                            all_usernames = ", ".join([row['username'] for row in rows if row['username'] != username])
-                            json_handleclient_userlist = {"command": "search",
-                                                          "server_message": f"\nAll users:\n{all_usernames}\n ",
-                                                          "all_usernames": all_usernames}
-                            conn.sendall(json.dumps(json_handleclient_userlist).encode('utf-8'))
-                        else:
-                            json_handleclient_no_users = {"command": "search",
-                                                          "server_message": "No users found.\n"}
-                            conn.sendall(json.dumps(json_handleclient_no_users).encode('utf-8'))
-                    except Exception as e:
-                        traceback.print_exc()
-                        json_handleclient_errorsearch = {"command": "search",
-                                                         "server_message": "Error while searching for users.\n"}
-                        conn.sendall(json.dumps(json_handleclient_errorsearch).encode('utf-8'))
-
-                elif data.lower() == "delete":
-                    # Check if user has sent any unread messages
-                    try:
-                        with connectsql() as db:
-                            with db.cursor() as cur:
-                                cur.execute("SELECT messageid FROM messages WHERE sender=%s AND isread=0 ORDER BY messageid DESC LIMIT 1""", (username,))
-                                row = cur.fetchone()
-                                if row:
-                                    last_msg_id = row['messageid']
-                                    # Confirm with the user that they want to delete the last message they sent
-                                    json_handleclient_delete = {"command": "delete",
-                                                                "server_message": "Are you sure you want to delete the last message you sent? Type 'yes' or 'no':\n "}
-                                    conn.sendall(json.dumps(json_handleclient_delete).encode('utf-8'))
-
-                                    confirm_resp_jsonstr = conn.recv(1024).decode('utf-8')
-                                    confirm_resp = json.loads(confirm_resp_jsonstr)["data"].lower() ### FIX ###
-
-                                    if confirm_resp == 'yes':
-                                        cur.execute("DELETE FROM messages WHERE messageid=%s", (last_msg_id,))
-                                        db.commit()
-                                        json_handleclient_deleteconfirm = {"command": "delete",
-                                                                           "server_message": "Your last message has been deleted.\n"}
-                                        conn.sendall(json.dumps(json_handleclient_deleteconfirm).encode('utf-8'))
-                                    else:
-                                        json_handleclient_deletecancel = {"command": "delete",
-                                                                          "server_message": "Delete canceled.\n"}
-                                        conn.sendall(json.dumps(json_handleclient_deletecancel).encode('utf-8'))
-                                else:
-                                    json_handleclient_no_delete = {"command": "delete",
-                                                                  "server_message": "You have not sent any messages able to be deleted. Note that you cannot delete messages already read.\n"}
-                                    conn.sendall(json.dumps(json_handleclient_no_delete).encode('utf-8'))
-                    except Exception as e:
-                        traceback.print_exc()
-                        json_handleclient_deleteerror = {"command": "delete",
-                                                         "server_message": "Error deleting your last message. Please try again.\n"}
-                        conn.sendall(json.dumps(json_handleclient_deleteerror).encode('utf-8'))
-
-                elif data.lower() == "deactivate":
-                    # Confirm with the user that this will deactivate (delete) their account
-                    json_handleclient_deactivateconfirm = {"command": "deactivate",
-                                                           "server_message": "Are you sure you want to deactivate your account?\n This will remove your account and all messages you've sent.\n Type 'yes' to confirm or 'no' to cancel.\n "}
-                    conn.sendall(json.dumps(json_handleclient_deactivateconfirm).encode('utf-8'))
-
-                    confirm_resp_jsonstr = conn.recv(1024).decode('utf-8')
-                    confirm_resp = json.loads(confirm_resp_jsonstr)["data"].lower() ### FIX ###
-
-                    if confirm_resp == 'yes':
-                        try:
-                            with connectsql() as db:
-                                with db.cursor() as cur:
-                                    # Delete all messages sent by this user
-                                    cur.execute("DELETE FROM messages WHERE sender=%s", (username,))
-                                    # Delete the user record
-                                    cur.execute("DELETE FROM users WHERE username=%s", (username,))
-                                    db.commit()
-                            json_handleclient_deactivatedone = {"command": "deactivate",
-                                                                "server_message": "Your account and all your sent messages have been removed. Goodbye.\n"}
-                            conn.sendall(json.dumps(json_handleclient_deactivatedone).encode('utf-8'))
-                        except Exception as e:
-                            traceback.print_exc()
-                            json_handleclient_deactivateerror = {"command": "deactivate",
-                                                                 "server_message": "Error deactivating your account.\n"}
-                            conn.sendall(json.dumps(json_handleclient_deactivateerror).encode('utf-8'))
-                        finally:
-                            # Force a break so we exit the loop and close connection
-                            break
-                    else:
-                        json_handleclient_deactivatecancel = {"command": "deactivate",
-                                                              "server_message": "Account deactivation canceled.\n"}
-                        conn.sendall(json.dumps(json_handleclient_deactivatecancel).encode('utf-8'))
-
-                else:
-                    # Unrecognized command
-                    json_handleclient_unrecognized = {"command": "handleclient",
-                                                      "server_message": "Error: Messages must start with '@username' or use 'check', 'logoff',' search', 'delete', or 'deactivate'.\n "}
-                    conn.sendall(json.dumps(json_handleclient_unrecognized).encode('utf-8'))
-
-    except Exception as e:
-        print("Exception in handle_client:", e)
-        traceback.print_exc()
-    finally:
-        # If user was logged in, mark them inactive
-        if username:
+        try:
             with connectsql() as db:
                 with db.cursor() as cur:
-                    cur.execute("UPDATE users SET active=0 WHERE username=%s", (username,))
+                    cur.execute("SELECT socket_id, active FROM users WHERE username=%s", (recipient,))
+                    row = cur.fetchone()
+                    if row:
+                        # Insert into DB
+                        cur.execute("""INSERT INTO messages (receiver, sender, message, isread)
+                                    VALUES (%s, %s, %s, 0)""",
+                                    (recipient, sender, message_body))
+                        db.commit()
+                        if row['active'] and row['socket_id'] and row['socket_id'].isdigit():
+                            tsid = int(row['socket_id'])
+                            if tsid in clients:
+                                cur.execute("SELECT messageid FROM messages WHERE message=%s", (message))
+                                msg_id = cur.fetchall()
+                                msg_ids = tuple([m['messageid'] for m in msg_id])
+                                query = "UPDATE messages SET isread=1 WHERE messageid=%s"
+                                cur.execute(query, (msg_ids[0],))
+                                db.commit()
+                                msg_data = {
+                                'sender': sender,
+                                'message_body': message_body,
+                                'timestamp': time.strftime("%Y-%m-%d %H:%M:%S")
+                            }
+                            user_message_queues[recipient].put(msg_data)
+                    else:
+                        return chat_pb2.SendMessageResponse(
+                        success=False,
+                        server_message="Username does not exist."
+                    )
+
+        except Exception as e:
+            traceback.print_exc()
+            return chat_pb2.SendMessageResponse(
+                success=False,
+                server_message="Error storing/sending message."
+            )
+
+        # If we reach here, the message was sent successfully but not sure if this is actually neccessary 
+        # Logic here is a bit confusing because I'm not sure if this will automatically send if the user is active 
+        return chat_pb2.SendMessageResponse(
+            success=True,
+            server_message="Message sent successfully."
+        )
+    
+    def CheckMessages(self, request, context):
+        """
+        Server-streaming: yield unread messages (in batches) or 
+        show how many unread exist.
+        """
+        username = request.username
+        choice = request.choice
+        chosen_sender = request.sender
+
+        if not username:
+            # Just yield one response and end
+            yield chat_pb2.CheckMessagesResponse(
+                command="checkmessages",
+                server_message="Invalid username."
+            )
+            return
+
+        # Count unread
+        with connectsql() as db:
+            with db.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*) AS cnt
+                    FROM messages
+                    WHERE receiver=%s AND isread=0
+                """, (username,))
+                row = cur.fetchone()
+                unread_count = row['cnt']
+
+                if unread_count == 0:
+                    yield chat_pb2.CheckMessagesResponse(
+                        command="checkmessages",
+                        server_message="You have 0 unread messages."
+                    )
+                    return
+
+                # Unread messages
+                yield chat_pb2.CheckMessagesResponse(
+                    command="checkmessages",
+                    server_message=f"You have {unread_count} unread messages total."
+                )
+
+                # Handling client choice
+                if choice == "2":
+                    # user chose to skip reading
+                    yield chat_pb2.CheckMessagesResponse(
+                        command="checkmessages",
+                        server_message="Skipping reading messages."
+                    )
+                    return
+
+                # Read from a particular sender
+                cur.execute("""
+                    SELECT sender, COUNT(*) as num
+                    FROM messages
+                    WHERE receiver=%s AND isread=0
+                    GROUP BY sender
+                """, (username,))
+                senders_info = cur.fetchall()
+                if not senders_info:
+                    yield chat_pb2.CheckMessagesResponse(
+                        command="checkmessages",
+                        server_message="No unread messages found (possibly updated)."
+                    )
+                    return
+
+                # Show all senders & counts
+                info_str = "\n".join(
+                    [f"{r['sender']} ({r['num']} messages)" for r in senders_info]
+                )
+                yield chat_pb2.CheckMessagesResponse(
+                    command="checkmessages",
+                    server_message=f"Unread messages from:\n{info_str}\n"
+                )
+
+                # If the client has specified a sender to read from (request.sender)
+                if chosen_sender:
+                    # fetch those messages
+                    cur.execute("""
+                        SELECT messageid, sender, message, datetime
+                        FROM messages
+                        WHERE receiver=%s AND sender=%s AND isread=0
+                        ORDER BY messageid
+                    """, (username, chosen_sender))
+                    unread_msgs = cur.fetchall()
+                    if not unread_msgs:
+                        yield chat_pb2.CheckMessagesResponse(
+                            command="checkmessages",
+                            server_message=f"No unread messages from {chosen_sender}."
+                        )
+                        return
+
+                    # Batch for display: if more than 5, show in batches of 5
+                    batch_size = 5
+                    for i in range(0, len(unread_msgs), batch_size):
+                        batch = unread_msgs[i:i+batch_size]
+                        for msg in batch:
+                            timestamp_str = msg['datetime'].strftime("%Y-%m-%d %H:%M:%S")
+                            yield chat_pb2.CheckMessagesResponse(
+                                command="checkmessages",
+                                server_message=f"{timestamp_str} {msg['sender']}: {msg['message']}",
+                                sender=msg['sender'],
+                                message_body=msg['message']
+                            )
+
+                        # Mark as read
+                        batch_ids = [m['messageid'] for m in batch]
+                        q_marks = ','.join(['%s'] * len(batch_ids))
+                        update_sql = f"UPDATE messages SET isread=1 WHERE messageid IN ({q_marks})"
+                        cur.execute(update_sql, batch_ids)
+                        db.commit()
+
+                        yield chat_pb2.CheckMessagesResponse(
+                            command="checkmessages",
+                            server_message="(This batch marked as read.)"
+                        )
+
+                        # If more messages remain, use a prompt to continue
+                        if i + batch_size < len(unread_msgs):
+                            yield chat_pb2.CheckMessagesResponse(
+                            command="checkmessages",
+                            server_message="Type anything to see the next batch of messages..."
+                        )
+
+                    return
+
+                # Error handling 
+                yield chat_pb2.CheckMessagesResponse(
+                    command="checkmessages",
+                    server_message="Please specify a sender to read from, or choose to skip."
+                )
+
+    def Logoff(self, request, context):
+        """Mark the user as inactive (active=0)."""
+        username = request.username
+        if not username:
+            return chat_pb2.Response(
+                command="logoff",
+                server_message="No username provided."
+            )
+
+        with connectsql() as db:
+            with db.cursor() as cur:
+                cur.execute("UPDATE users SET active=0 WHERE username=%s", (username,))
                 db.commit()
 
-        if user_id in clients:
-            del clients[user_id]
-        conn.close()
-        print(f"Connection with {addr} closed.")
+        return chat_pb2.Response(
+            command="logoff",
+            server_message=f"{username} has been logged off."
+        )
+
+    def Logoff(self, request, context):
+        """Mark the user as inactive (active=0)."""
+        username = request.username
+        if not username:
+            return chat_pb2.Response(
+                command="logoff",
+                server_message="No username provided."
+            )
+
+        with connectsql() as db:
+            with db.cursor() as cur:
+                cur.execute("UPDATE users SET active=0 WHERE username=%s", (username,))
+                db.commit()
+
+        return chat_pb2.Response(
+            command="logoff",
+            server_message=f"{username} has been logged off."
+        )
+
+    def DeleteLastMessage(self, request, context):
+        """
+        Delete the last *unread* message that this user has sent, 
+        if 'confirmation' == 'yes'.
+        """
+        username = request.username
+        confirmation = request.confirmation.lower() if request.confirmation else "no"
+
+        if confirmation != 'yes':
+            return chat_pb2.Response(
+                command="delete",
+                server_message="Delete canceled (no confirmation)."
+            )
+
+        try:
+            with connectsql() as db:
+                with db.cursor() as cur:
+                    # Check the last unread message (sender=the user, isread=0)
+                    cur.execute("""
+                        SELECT messageid
+                        FROM messages
+                        WHERE sender=%s AND isread=0
+                        ORDER BY messageid DESC
+                        LIMIT 1
+                    """, (username,))
+                    row = cur.fetchone()
+                    if not row:
+                        return chat_pb2.Response(
+                            command="delete",
+                            server_message="You have not sent any messages able to be deleted. Note that you cannot delete messages already read."
+                        )
+                    last_msg_id = row['messageid']
+                    # Delete it
+                    cur.execute("DELETE FROM messages WHERE messageid=%s", (last_msg_id,))
+                    db.commit()
+            return chat_pb2.Response(
+                command="delete",
+                server_message="Your last unread message was deleted."
+            )
+
+        except Exception:
+            traceback.print_exc()
+            return chat_pb2.Response(
+                command="delete",
+                server_message="Error deleting your last message."
+            )
+            
+    def DeactivateAccount(self, request, context):
+        """
+        Permanently delete a user’s account and all messages they've sent
+        if 'confirmation' == 'yes'.
+        """
+        username = request.username
+        confirmation = request.confirmation.lower() if request.confirmation else "no"
+
+        if confirmation != 'yes':
+            return chat_pb2.Response(
+                command="deactivate",
+                server_message="Account deactivation canceled (no confirmation)."
+            )
+
+        try:
+            with connectsql() as db:
+                with db.cursor() as cur:
+                    # Delete all messages sent by this user
+                    cur.execute("DELETE FROM messages WHERE sender=%s", (username,))
+                    # Delete user record
+                    cur.execute("DELETE FROM users WHERE username=%s", (username,))
+                    db.commit()
+            return chat_pb2.Response(
+                command="deactivate",
+                server_message="Your account and all sent messages have been removed."
+            )
+        except Exception:
+            traceback.print_exc()
+            return chat_pb2.Response(
+                command="deactivate",
+                server_message="Error deactivating account."
+            )
 
 def start_server():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))

@@ -9,6 +9,16 @@ service Chat {
     rpc SendUsername(Username) returns (Response) {}
 
     rpc SendPassword(Password) returns (Response) {}
+
+    rpc CheckMessages(CheckMessagesRequest) returns (CheckMessagesResponse) {}
+
+    rpc Logoff(LogoffRequest) returns (Response);
+    
+    rpc SearchUsers(SearchRequest) returns (SearchResponse);
+    
+    rpc DeleteLastMessage(DeleteRequest) returns (Response);
+    
+    rpc DeactivateAccount(DeactivateRequest) returns (Response);
 }
 
 // Client sending to server
@@ -47,12 +57,23 @@ message Response {
     string server_message = 2;
 }
 
-// Server to clients
+// Sending and Recieving Messages
+
+message SendMessageRequest {
+  string sender = 1;
+  string recipient = 2;
+  string message_body = 3;
+}
+
+message SendMessageResponse {
+  bool success = 1;
+  string server_message = 2;
+}
 
 message CheckMessagesRequest {
-    string username = 1;
-    string choice = 2;
-    string sender = 3;
+  string username = 1;
+  string choice = 2;
+  string sender = 3;
 }
 
 message CheckMessagesResponse {
@@ -61,4 +82,32 @@ message CheckMessagesResponse {
     string sender = 3;
     string message_body = 4;
     repeated string messages = 5;
+}
+
+// Logoff
+message LogoffRequest {
+  string username = 1;
+}
+
+// Search
+message SearchRequest {
+  string username = 1;
+}
+
+message SearchResponse {
+  bool success = 1;
+  repeated string usernames = 2;
+  string server_message = 3;
+}
+
+// Delete
+message DeleteRequest {
+  string username = 1;
+  string confirmation = 2; // e.g. "yes"/"no"
+}
+
+//Deactivate 
+message DeactivateRequest {
+  string username = 1;
+  string confirmation = 2; // e.g. "yes"/"no"
 }
