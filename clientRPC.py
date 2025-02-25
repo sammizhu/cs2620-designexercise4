@@ -16,12 +16,12 @@ class ChatClient:
         self.username = None
         self.stub = None
         self.channel = None
-        # When in a bidirectional session, active_bidi holds a command ("check", "delete", "deactivate")
+        # For bidirectional sessions, active_bidi in ["check", "delete", "deactivate"]
         self.active_bidi = None
         # Queue to route input during bidirectional sessions
         self.bidi_queue = None
 
-        # Create the four frames for different pages
+        # Frames for different pages
         self.welcome_frame = tk.Frame(self.root)
         self.login_frame = tk.Frame(self.root)
         self.register_frame = tk.Frame(self.root)
@@ -33,13 +33,12 @@ class ChatClient:
         self.build_register_frame()
         self.build_chat_frame()
 
-        # Start by showing the welcome page
         self.show_welcome_page()
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.mainloop()
 
-    # --------------------- UI Building ---------------------
+    # UI Building
     def build_welcome_frame(self):
         label = tk.Label(self.welcome_frame, text="Welcome to EST!\nPlease choose an option:", font=("Helvetica", 16))
         label.pack(pady=10)
@@ -89,7 +88,7 @@ class ChatClient:
         self.send_button = tk.Button(self.input_frame, text="Send", command=self.send_message)
         self.send_button.pack(side=tk.LEFT, padx=(5,0))
 
-    # --------------------- Page Navigation ---------------------
+    # Page Navigation
     def show_welcome_page(self):
         self.login_frame.pack_forget()
         self.register_frame.pack_forget()
@@ -114,7 +113,7 @@ class ChatClient:
         self.register_frame.pack_forget()
         self.chat_frame.pack(fill="both", expand=True)
 
-    # --------------------- Login/Registration ---------------------
+    # Login/ Registration Handling
     def handle_login(self):
         username = self.login_username_var.get().strip()
         password = self.login_password_var.get().strip()
@@ -132,7 +131,6 @@ class ChatClient:
                 self.username = username
                 self.root.after(0, self.show_chat_page)
                 self.append_message("Welcome, " + username + "!", sent_by_me=False)
-                # Chain the flows: first, check for backlog messages; then, auto-poll new ones.
                 threading.Thread(target=self.process_messages_flow, daemon=True).start()
             else:
                 err_msg = "Login error: " + response.server_message
@@ -184,13 +182,9 @@ class ChatClient:
                 self.channel = None
                 self.stub = None
 
-    # --------------------- Messages Flow ---------------------
+    # Message Flows
     def process_messages_flow(self):
-        """
-        First run the interactive check_messages_stream to display unread messages (backlog).
-        Once that stream ends (i.e. the user finishes checking messages),
-        automatically start the receive_messages_stream to pull new messages.
-        """
+        """CheckMessages called upon initial login but afterwards, use ReceiveMessages to pull new messages."""
         self.check_messages_stream()
         self.receive_messages_stream()
 
@@ -208,9 +202,8 @@ class ChatClient:
         try:
             responses = self.stub.CheckMessages(request_generator(), metadata=(('username', self.username),))
             for resp in responses:
-                print("resp: ", resp)
                 self.append_message(resp.server_message, sent_by_me=False)
-                if resp.server_message == "Skipping reading messages." or resp.server_message == "No messages to read.":
+                if resp.server_message == "Skipping reading messages." or resp.server_message == "Invalid choice. Aborting.":
                     result_generator.cancel()
                     sys.exit(0)
                     break
@@ -236,7 +229,9 @@ class ChatClient:
         self.active_bidi = "delete"
         self.bidi_queue = queue.Queue()
         def request_gen():
+            # Step 1: Trigger the deletion prompt by sending an initial request with empty confirmation.
             yield chat_pb2.DeleteRequest(username=self.username, confirmation="")
+            # Step 2: Wait for user's confirmation input from the GUI.
             confirmation = ""
             while not confirmation:
                 confirmation = self.bidi_queue.get().strip()
@@ -245,7 +240,7 @@ class ChatClient:
             responses = self.stub.DeleteLastMessage(request_gen(), metadata=(('username', self.username),))
             for resp in responses:
                 self.append_message(resp.server_message, sent_by_me=False)
-        except Exception as e:
+        except grpc.RpcError as e:
             self.append_message("Error in delete_last_message_stream: " + str(e), sent_by_me=False)
         finally:
             self.active_bidi = None
@@ -270,20 +265,19 @@ class ChatClient:
         finally:
             self.active_bidi = None
 
-    # --------------------- Sending & Displaying ---------------------
     def send_message(self, event=None):
         message = self.message_entry.get().strip()
         if not message:
             return
         self.message_entry.delete(0, tk.END)
-        # If in a bidirectional session, route input to the active stream.
+        # Bidirectional routes
         if self.active_bidi:
             if self.bidi_queue:
                 self.bidi_queue.put(message)
             self.append_message(message, sent_by_me=True)
             return
 
-        # Otherwise, handle as a regular command.
+        # Regular commands
         self.append_message(message, sent_by_me=True)
         if message.lower() == "check":
             threading.Thread(target=self.check_messages_stream, daemon=True).start()

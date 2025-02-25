@@ -23,7 +23,7 @@ PORT = args.port
 # Database connection function
 def connectsql():
     return pymysql.connect(
-        host="localhost",
+        host=HOST,
         user='root',
         password='',
         database='db262',
@@ -119,7 +119,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 command="2",
                 server_message="Incorrect password."
             )
-        # Mark user active
+
         with connectsql() as db:
             with db.cursor() as cur:
                 cur.execute("UPDATE users SET active=1 WHERE username=%s", (username,))
@@ -171,20 +171,8 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             )
 
     def CheckMessages(self, request_iterator, context):
-        """
-        Bidirectional conversation for checking messages:
-        1. The first request must include the username.
-        2. The server checks unread count and asks: read (1) or skip (2).
-        3. The client replies with a choice.
-        4. If "1", the server lists sender summaries and then asks for a sender.
-        5. The client replies with the sender’s name.
-        6. The server then streams messages in batches of 5.
-            After each batch, if more messages remain, the server yields a prompt and waits
-            for any input from the client before sending the next batch.
-        """
         try:
             req_iter = iter(request_iterator)
-            # Stage 0: Expect username.
             first_req = next(req_iter, None)
             if first_req is None or not first_req.username.strip():
                 yield chat_pb2.CheckMessagesResponse(
@@ -195,25 +183,29 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             username = first_req.username.strip()
             with connectsql() as db:
                 with db.cursor() as cur:
-                    cur.execute("""
-                        SELECT COUNT(*) AS cnt
-                        FROM messages
-                        WHERE receiver=%s AND isread=0
-                    """, (username,))
+                    cur.execute("SELECT COUNT(*) AS cnt FROM messages WHERE receiver=%s AND isread=0", (username,))
                     row = cur.fetchone()
                     unread_count = row['cnt']
             if unread_count == 0:
                 yield chat_pb2.CheckMessagesResponse(
                     command="checkmessages",
-                    server_message="You have 0 unread messages."
-                )
-                return
+                    server_message = (
+                    " ------------------------------------------\n"
+                    "| You have 0 unread messages.             |\n"
+                    "| Type @username msg to send new messages |\n"
+                    " ------------------------------------------"
+                ))
+                return                                                                                                             
             else:
                 yield chat_pb2.CheckMessagesResponse(
                     command="checkmessages",
-                    server_message=f"You have {unread_count} unread messages.\nType '1' to read them, or '2' to skip."
-                )
-            # Stage 1: Wait for read/skip choice.
+                    server_message = (
+                        " ----------------------------------------- \n"
+                        f"| You have {unread_count} unread messages.              |\n"
+                        "| Type '1' to read them, or '2' to skip    |\n"
+                        "| and send new messages.                   |\n"
+                        "  ----------------------------------------- "
+                ))
             req = next(req_iter, None)
             if req is None:
                 yield chat_pb2.CheckMessagesResponse(
@@ -222,7 +214,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 )
                 return
             choice = req.choice.strip()
-            print("choice", choice)
             if choice == "2":
                 yield chat_pb2.CheckMessagesResponse(
                     command="checkmessages",
@@ -236,15 +227,9 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                     server_message="Invalid choice. Aborting."
                 )
                 context.cancel()
-            # Stage 2: Send list of senders.
             with connectsql() as db:
                 with db.cursor() as cur:
-                    cur.execute("""
-                        SELECT sender, COUNT(*) as num
-                        FROM messages
-                        WHERE receiver=%s AND isread=0
-                        GROUP BY sender
-                    """, (username,))
+                    cur.execute("SELECT sender, COUNT(*) as num FROM messages WHERE receiver=%s AND isread=0 GROUP BY sender", (username,))
                     senders_info = cur.fetchall()
             if not senders_info:
                 yield chat_pb2.CheckMessagesResponse(
@@ -255,9 +240,8 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             senders_str = ", ".join([f"{r['sender']}({r['num']})" for r in senders_info])
             yield chat_pb2.CheckMessagesResponse(
                 command="checkmessages",
-                server_message=f"Unread from: {senders_str}\nType the sender's name to read those messages."
+                server_message=f"You have unread messages from:\n{senders_str}\nWhich sender do you want to read from?"
             )
-            # Stage 3: Wait for sender name.
             req = next(req_iter, None)
             if req is None or not req.sender.strip():
                 yield chat_pb2.CheckMessagesResponse(
@@ -268,12 +252,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             chosen_sender = req.sender.strip()
             with connectsql() as db:
                 with db.cursor() as cur:
-                    cur.execute("""
-                        SELECT messageid, sender, message, datetime
-                        FROM messages
-                        WHERE receiver=%s AND sender=%s AND isread=0
-                        ORDER BY messageid
-                    """, (username, chosen_sender))
+                    cur.execute("SELECT messageid, sender, message, datetime FROM messages WHERE receiver=%s AND sender=%s AND isread=0 ORDER BY messageid", (username, chosen_sender))
                     msgs = cur.fetchall()
             if not msgs:
                 yield chat_pb2.CheckMessagesResponse(
@@ -281,7 +260,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                     server_message=f"No unread messages from {chosen_sender}."
                 )
                 return
-            # Stage 4: Send messages in batches of 5, waiting for input between batches.
             batch_size = 5
             i = 0
             while i < len(msgs):
@@ -294,7 +272,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                         sender=m['sender'],
                         message_body=m['message']
                     )
-                # Mark current batch as read.
                 batch_ids = [m['messageid'] for m in batch]
                 with connectsql() as db:
                     with db.cursor() as cur:
@@ -306,7 +283,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                     db.commit()
                 yield chat_pb2.CheckMessagesResponse(
                     command="checkmessages",
-                    server_message="(This batch marked as read.)"
+                    server_message="(The current batch of messages has been marked as read.)"
                 )
                 i += batch_size
                 if i < len(msgs):
@@ -320,7 +297,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                         break
             yield chat_pb2.CheckMessagesResponse(
                 command="checkmessages",
-                server_message="Done reading messages from this sender."
+                server_message="All messages from this sender have been read."
             )
         except Exception as e:
             traceback.print_exc()
@@ -375,41 +352,56 @@ class ChatService(chat_pb2_grpc.ChatServicer):
 
     def DeleteLastMessage(self, request_iterator, context):
         """
-        Bidirectional conversation for delete:
-         1. Server sends a prompt asking for confirmation.
-         2. The server waits (in a loop) until a nonempty confirmation is received.
-         3. If the confirmation is 'yes', deletion occurs; otherwise, cancellation.
+        Two-step bidirectional conversation for deleting the last unread message:
+        1. The client sends a DeleteRequest (confirmation empty) to trigger the prompt.
+        2. The server looks up the last unread message and yields a prompt showing its details.
+        3. The client sends a second DeleteRequest with a confirmation.
+            If 'yes', the message is deleted; otherwise, deletion is canceled.
         """
         try:
+            req_iter = iter(request_iterator)
+            # First request: username (confirmation may be empty)
+            first_req = next(req_iter, None)
+            if first_req is None or not first_req.username.strip():
+                yield chat_pb2.Response(
+                    command="delete",
+                    server_message="No username provided. Aborting."
+                )
+                return
+            username = first_req.username.strip()
+            # Look up the last unread message for this user.
+            with connectsql() as db:
+                with db.cursor() as cur:
+                    cur.execute(
+                        "SELECT messageid, message, receiver FROM messages WHERE sender=%s AND isread=0 ORDER BY messageid DESC LIMIT 1",
+                        (username,)
+                    )
+                    row = cur.fetchone()
+            if not row:
+                yield chat_pb2.Response(
+                    command="delete",
+                    server_message="No unread messages to delete."
+                )
+                return
+            # Yield a prompt showing the message details.
             yield chat_pb2.Response(
                 command="delete",
-                server_message="Are you sure you want to delete your last unread message? (yes/no)"
+                server_message=f"Your last unread message is: '{row['message']}' sent to {row['receiver']}. Do you want to delete it? (yes/no)"
             )
-            req_iter = iter(request_iterator)
-            confirmation = ""
-            # Block until a nonempty confirmation is received.
-            while not confirmation:
-                req = next(req_iter)
-                confirmation = req.confirmation.strip().lower()
-            username = req.username.strip()
-            if confirmation == 'yes':
+            # Wait for the second request with the confirmation.
+            second_req = next(req_iter, None)
+            if second_req is None or not second_req.confirmation.strip():
+                yield chat_pb2.Response(
+                    command="delete",
+                    server_message="No confirmation provided. Delete canceled."
+                )
+                return
+            confirmation = second_req.confirmation.strip().lower()
+            if confirmation == "yes":
                 with connectsql() as db:
                     with db.cursor() as cur:
-                        cur.execute("""
-                            SELECT messageid FROM messages
-                            WHERE sender=%s AND isread=0
-                            ORDER BY messageid DESC LIMIT 1
-                        """, (username,))
-                        row = cur.fetchone()
-                        if not row:
-                            yield chat_pb2.Response(
-                                command="delete",
-                                server_message="No unread messages to delete."
-                            )
-                            return
-                        last_id = row['messageid']
-                        cur.execute("DELETE FROM messages WHERE messageid=%s", (last_id,))
-                        db.commit()
+                        cur.execute("DELETE FROM messages WHERE messageid=%s", (row['messageid'],))
+                    db.commit()
                 yield chat_pb2.Response(
                     command="delete",
                     server_message="Your last unread message was deleted."
@@ -427,12 +419,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             )
 
     def DeactivateAccount(self, request_iterator, context):
-        """
-        Bidirectional conversation for deactivation:
-         1. Server sends a prompt asking for confirmation.
-         2. The server waits until a nonempty confirmation is received.
-         3. If confirmed ('yes'), account and messages are removed; otherwise, cancellation.
-        """
         try:
             yield chat_pb2.Response(
                 command="deactivate",
@@ -472,12 +458,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
         while context.is_active():
             with connectsql() as db:
                 with db.cursor() as cur:
-                    cur.execute("""
-                        SELECT messageid, sender, message, datetime 
-                        FROM messages 
-                        WHERE receiver=%s AND isread=0 
-                        ORDER BY datetime
-                    """, (username,))
+                    cur.execute("SELECT messageid, sender, message, datetime FROM messages WHERE receiver=%s AND isread=0 ORDER BY datetime", (username,))
                     msgs = cur.fetchall()
             if msgs:
                 for m in msgs:
@@ -494,7 +475,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                         placeholders = ','.join(['%s'] * len(batch_ids))
                         cur.execute(f"UPDATE messages SET isread=1 WHERE messageid IN ({placeholders})", batch_ids)
                     db.commit()
-            time.sleep(2)  # Poll every 2 seconds (adjust as needed)
+            time.sleep(1)  
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))

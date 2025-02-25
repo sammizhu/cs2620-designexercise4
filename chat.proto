@@ -4,17 +4,11 @@ service Chat {
     rpc Register(RegisterRequest) returns (Response);
     rpc Login(LoginRequest) returns (Response);
     rpc SendMessage(GeneralMessage) returns (SendMessageResponse);
-
-    // Bidirectional streaming for interactive message checking
     rpc CheckMessages(stream CheckMessagesRequest) returns (stream CheckMessagesResponse);
-
     rpc Logoff(LogoffRequest) returns (Response);
     rpc SearchUsers(SearchRequest) returns (SearchResponse);
-
-    // Bidirectional streaming for delete and deactivation confirmations
     rpc DeleteLastMessage(stream DeleteRequest) returns (stream Response);
     rpc DeactivateAccount(stream DeactivateRequest) returns (stream Response);
-
     rpc ReceiveMessages(ReceiveRequest) returns (stream ReceiveResponse);
 
 }
@@ -51,9 +45,8 @@ message Response {
 // CheckMessages bidirectional streaming
 message CheckMessagesRequest {
     string username = 1;
-    // When replying, one of the following fields will be used:
-    string choice   = 2;  // e.g., "1" to read, "2" to skip
-    string sender   = 3;  // e.g., the sender's name when prompted
+    string choice   = 2;  // "1" to read, "2" to skip
+    string sender   = 3;  // the sender's name when prompted
 }
 message CheckMessagesResponse {
     string command        = 1;

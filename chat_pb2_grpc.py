@@ -103,8 +103,7 @@ class ChatServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def CheckMessages(self, request_iterator, context):
-        """Bidirectional streaming for interactive message checking
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -122,8 +121,7 @@ class ChatServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def DeleteLastMessage(self, request_iterator, context):
-        """Bidirectional streaming for delete and deactivation confirmations
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
