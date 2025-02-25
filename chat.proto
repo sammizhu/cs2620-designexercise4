@@ -50,7 +50,7 @@ message CheckMessagesRequest {
     string username = 1;
     // When replying, one of the following fields will be used:
     string choice   = 2;  // e.g., "1" to read, "2" to skip
-    string sender   = 3;  // e.g., the sender's name when asked
+    string sender   = 3;  // e.g., the sender's name when prompted
 }
 message CheckMessagesResponse {
     string command        = 1;
