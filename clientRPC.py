@@ -99,8 +99,9 @@ class ChatClient:
                 self.username = username
                 self.root.after(0, self.show_chat_page)
                 self.append_message("Welcome, " + username + "!", sent_by_me=False)
-                # Automatically call the check function after login.
-                threading.Thread(target=self.check_messages_stream, daemon=True).start()
+                # Start the ReceiveMessages stream in a separate thread.
+                threading.Thread(target=self.receive_messages_stream, daemon=True).start()
+                # You can also still allow manual checking with check_messages_stream if desired.
             else:
                 self.root.after(0, lambda: self.login_error_label.config(text=response.server_message))
                 self.channel.close()
@@ -112,6 +113,16 @@ class ChatClient:
                 self.channel.close()
                 self.channel = None
                 self.stub = None
+
+    def receive_messages_stream(self):
+        """Continuously receive pushed messages from the server."""
+        try:
+            responses = self.stub.ReceiveMessages(chat_pb2.ReceiveRequest(username=self.username))
+            for resp in responses:
+                display = f"[{resp.timestamp}] {resp.sender}: {resp.message}"
+                self.append_message(display, sent_by_me=False)
+        except Exception as e:
+            self.append_message("Error in receive_messages_stream: " + str(e), sent_by_me=False)
 
     # ----------------------------
     # Register page

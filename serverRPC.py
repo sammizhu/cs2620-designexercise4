@@ -9,6 +9,8 @@ import grpc
 from concurrent import futures
 import chat_pb2
 import chat_pb2_grpc
+import time
+
 
 # Command-line arguments
 parser = argparse.ArgumentParser(description="Start the chat server (gRPC).")
@@ -456,6 +458,36 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 command="deactivate",
                 server_message="Error: " + str(e)
             )
+    
+    def ReceiveMessages(self, request, context):
+        """Continuously poll the database for unread messages and stream them to the client."""
+        username = request.username.strip()
+        while context.is_active():
+            with connectsql() as db:
+                with db.cursor() as cur:
+                    cur.execute("""
+                        SELECT messageid, sender, message, datetime 
+                        FROM messages 
+                        WHERE receiver=%s AND isread=0 
+                        ORDER BY datetime
+                    """, (username,))
+                    msgs = cur.fetchall()
+            if msgs:
+                for m in msgs:
+                    ts = m['datetime'].strftime("%Y-%m-%d %H:%M:%S")
+                    yield chat_pb2.ReceiveResponse(
+                        sender=m['sender'],
+                        message=m['message'],
+                        timestamp=ts
+                    )
+                # Mark these messages as read:
+                batch_ids = [m['messageid'] for m in msgs]
+                with connectsql() as db:
+                    with db.cursor() as cur:
+                        placeholders = ','.join(['%s'] * len(batch_ids))
+                        cur.execute(f"UPDATE messages SET isread=1 WHERE messageid IN ({placeholders})", batch_ids)
+                    db.commit()
+            time.sleep(2)  # Poll every 2 seconds (adjust as needed)
 
 def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))

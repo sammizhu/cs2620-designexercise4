@@ -14,6 +14,9 @@ service Chat {
     // Bidirectional streaming for delete and deactivation confirmations
     rpc DeleteLastMessage(stream DeleteRequest) returns (stream Response);
     rpc DeactivateAccount(stream DeactivateRequest) returns (stream Response);
+
+    rpc ReceiveMessages(ReceiveRequest) returns (stream ReceiveResponse);
+
 }
 
 // Registration
@@ -84,4 +87,14 @@ message DeleteRequest {
 message DeactivateRequest {
     string username     = 1;
     string confirmation = 2;
+}
+
+message ReceiveRequest {
+    string username = 1;
+}
+
+message ReceiveResponse {
+    string sender = 1;
+    string message = 2;
+    string timestamp = 3;
 }
