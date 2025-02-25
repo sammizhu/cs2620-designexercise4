@@ -136,7 +136,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
         if not full_text.startswith("@"):
             return chat_pb2.SendMessageResponse(
                 success=False,
-                server_message="Message must start with '@username' for a direct message."
+                server_message="To send messages, use '@username message'. You can also type 'check', 'logoff',' search', 'delete', or 'deactivate'."
             )
         parts = full_text.split(" ", 1)
         if len(parts) < 2:
@@ -173,18 +173,18 @@ class ChatService(chat_pb2_grpc.ChatServicer):
     def CheckMessages(self, request_iterator, context):
         """
         Bidirectional conversation for checking messages:
-         1. The first request must include the username.
-         2. The server checks unread count and asks: read (1) or skip (2).
-         3. The client replies with a choice.
-         4. If "1", the server lists sender summaries and then asks for a sender.
-         5. The client replies with the sender’s name.
-         6. The server then streams messages in batches of 5.
-             After each batch, if more messages remain, the server yields a prompt and waits
-             for any input from the client before sending the next batch.
+        1. The first request must include the username.
+        2. The server checks unread count and asks: read (1) or skip (2).
+        3. The client replies with a choice.
+        4. If "1", the server lists sender summaries and then asks for a sender.
+        5. The client replies with the sender’s name.
+        6. The server then streams messages in batches of 5.
+            After each batch, if more messages remain, the server yields a prompt and waits
+            for any input from the client before sending the next batch.
         """
         try:
             req_iter = iter(request_iterator)
-            # Stage 0: Expect username
+            # Stage 0: Expect username.
             first_req = next(req_iter, None)
             if first_req is None or not first_req.username.strip():
                 yield chat_pb2.CheckMessagesResponse(
@@ -213,21 +213,30 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                     command="checkmessages",
                     server_message=f"You have {unread_count} unread messages.\nType '1' to read them, or '2' to skip."
                 )
-            # Stage 1: Wait for read/skip choice
+            # Stage 1: Wait for read/skip choice.
             req = next(req_iter, None)
-            if req is None or req.choice.strip() not in ("1", "2"):
+            if req is None:
                 yield chat_pb2.CheckMessagesResponse(
                     command="checkmessages",
-                    server_message="Invalid choice. Aborting."
+                    server_message="No choice provided. Aborting."
                 )
                 return
-            if req.choice.strip() == "2":
+            choice = req.choice.strip()
+            print("choice", choice)
+            if choice == "2":
                 yield chat_pb2.CheckMessagesResponse(
                     command="checkmessages",
                     server_message="Skipping reading messages."
                 )
-                return
-            # Stage 2: Send list of senders
+                context.cancel()
+                return 
+            elif choice not in ["1", "2"]:
+                yield chat_pb2.CheckMessagesResponse(
+                    command="checkmessages",
+                    server_message="Invalid choice. Aborting."
+                )
+                context.cancel()
+            # Stage 2: Send list of senders.
             with connectsql() as db:
                 with db.cursor() as cur:
                     cur.execute("""
@@ -248,7 +257,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 command="checkmessages",
                 server_message=f"Unread from: {senders_str}\nType the sender's name to read those messages."
             )
-            # Stage 3: Wait for sender name
+            # Stage 3: Wait for sender name.
             req = next(req_iter, None)
             if req is None or not req.sender.strip():
                 yield chat_pb2.CheckMessagesResponse(
@@ -272,8 +281,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                     server_message=f"No unread messages from {chosen_sender}."
                 )
                 return
-            # Stage 4: Send messages in batches of 5,
-            # waiting for any client input between batches.
+            # Stage 4: Send messages in batches of 5, waiting for input between batches.
             batch_size = 5
             i = 0
             while i < len(msgs):
@@ -286,7 +294,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                         sender=m['sender'],
                         message_body=m['message']
                     )
-                # Mark the current batch as read
+                # Mark current batch as read.
                 batch_ids = [m['messageid'] for m in batch]
                 with connectsql() as db:
                     with db.cursor() as cur:
@@ -306,7 +314,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                         command="checkmessages",
                         server_message="Type anything to see the next batch of messages..."
                     )
-                    # Wait for any input from the client before continuing.
                     try:
                         _ = next(req_iter)
                     except StopIteration:
