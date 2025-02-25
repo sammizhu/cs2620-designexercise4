@@ -4,15 +4,13 @@ import threading
 import queue
 import argparse
 import os
-import time
-import logging
-
 import grpc
 
 import chat_pb2
 import chat_pb2_grpc
 
-parser = argparse.ArgumentParser(description="Start the chat client.")
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description="Start the chat client (gRPC).")
 parser.add_argument("--host", default=os.getenv("CHAT_SERVER_HOST", "127.0.0.1"), help="Server hostname or IP")
 parser.add_argument("--port", type=int, default=int(os.getenv("CHAT_SERVER_PORT", 65432)), help="Port number")
 args = parser.parse_args()
@@ -22,256 +20,292 @@ PORT = args.port
 
 class ChatClient:
     def __init__(self):
-        # Connect to server
-        channel_addr = f"{HOST}:{PORT}" 
-        self.channel = grpc.insecure_channel(channel_addr)
-        self.stub = chat_pb2_grpc.ChatStub(self.channel)
-
         self.root = tk.Tk()
-        self.root.title("Chat Client")
-        self.receive_queue = queue.Queue()
+        self.root.title("Chat Client (gRPC)")
+        self.username = None
+        self.stub = None
+        self.channel = None
 
-        self.username = None  # track who is logged in
-        self.check_messages_thread = None
-        self.check_running = False
+        # Create UI pages
+        self.welcome_frame = tk.Frame(self.root)
+        self.login_frame = tk.Frame(self.root)
+        self.register_frame = tk.Frame(self.root)
+        self.chat_frame = tk.Frame(self.root)
 
-        # Build UI frames
-        self.build_frames()
+        self.build_welcome_frame()
+        self.build_login_frame()
+        self.build_register_frame()
+        self.build_chat_frame()
 
-        # Show welcome
-        self.show_welcome_frame()
+        self.show_welcome_page()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.mainloop()
 
-    def build_frames(self):
-        # 1) WELCOME
-        self.welcome_frame = tk.Frame(self.root)
-        tk.Label(self.welcome_frame, text="Welcome to the Chat!", font=("Helvetica", 16)).pack(pady=10)
-        tk.Button(self.welcome_frame, text="Login", command=self.show_login_frame).pack(pady=5)
-        tk.Button(self.welcome_frame, text="Register", command=self.show_register_frame).pack(pady=5)
+    # =========================
+    #   WELCOME PAGE
+    # =========================
+    def build_welcome_frame(self):
+        label = tk.Label(self.welcome_frame, text="Welcome to EST!\nPlease choose an option:", font=("Helvetica", 16))
+        label.pack(pady=10)
+        login_btn = tk.Button(self.welcome_frame, text="Login", width=15, command=self.show_login_page)
+        login_btn.pack(pady=5)
+        register_btn = tk.Button(self.welcome_frame, text="Register", width=15, command=self.show_register_page)
+        register_btn.pack(pady=5)
 
-        # 2) LOGIN
-        self.login_frame = tk.Frame(self.root)
-        tk.Label(self.login_frame, text="Login", font=("Helvetica", 16)).pack(pady=10)
-        tk.Label(self.login_frame, text="Username:").pack()
-        self.login_user_var = tk.StringVar()
-        tk.Entry(self.login_frame, textvariable=self.login_user_var).pack(pady=5)
-        tk.Label(self.login_frame, text="Password:").pack()
-        self.login_pass_var = tk.StringVar()
-        tk.Entry(self.login_frame, textvariable=self.login_pass_var, show="*").pack(pady=5)
-        tk.Button(self.login_frame, text="Submit", command=self.do_login).pack(pady=5)
-        self.login_error = tk.Label(self.login_frame, fg="red")
-        self.login_error.pack(pady=5)
-
-        # 3) REGISTER
-        self.register_frame = tk.Frame(self.root)
-        tk.Label(self.register_frame, text="Register", font=("Helvetica", 16)).pack(pady=10)
-        tk.Label(self.register_frame, text="Username:").pack()
-        self.reg_user_var = tk.StringVar()
-        tk.Entry(self.register_frame, textvariable=self.reg_user_var).pack(pady=5)
-        tk.Label(self.register_frame, text="Password:").pack()
-        self.reg_pass_var = tk.StringVar()
-        tk.Entry(self.register_frame, textvariable=self.reg_pass_var, show="*").pack(pady=5)
-        tk.Label(self.register_frame, text="Confirm Password:").pack()
-        self.reg_confirm_var = tk.StringVar()
-        tk.Entry(self.register_frame, textvariable=self.reg_confirm_var, show="*").pack(pady=5)
-        tk.Button(self.register_frame, text="Submit", command=self.do_register).pack(pady=5)
-        self.reg_error = tk.Label(self.register_frame, fg="red")
-        self.reg_error.pack(pady=5)
-
-        # 4) CHAT
-        self.chat_frame = tk.Frame(self.root)
-        self.chat_display = scrolledtext.ScrolledText(self.chat_frame, state='disabled', width=80, height=20)
-        self.chat_display.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
-
-        self.input_frame = tk.Frame(self.chat_frame)
-        self.input_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
-        self.msg_var = tk.StringVar()
-        tk.Entry(self.input_frame, textvariable=self.msg_var, width=60).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        tk.Button(self.input_frame, text="Send", command=self.send_message).pack(side=tk.LEFT, padx=5)
-
-        # Buttons for checking messages, logoff, etc.
-        self.buttons_frame = tk.Frame(self.chat_frame)
-        self.buttons_frame.pack(fill=tk.X)
-        tk.Button(self.buttons_frame, text="Check Messages", command=self.check_messages).pack(side=tk.LEFT, padx=5)
-        tk.Button(self.buttons_frame, text="Logoff", command=self.do_logoff).pack(side=tk.LEFT, padx=5)
-        tk.Button(self.buttons_frame, text="Delete Last", command=self.delete_last_message).pack(side=tk.LEFT, padx=5)
-        tk.Button(self.buttons_frame, text="Deactivate", command=self.deactivate_account).pack(side=tk.LEFT, padx=5)
-
-    def show_welcome_frame(self):
+    def show_welcome_page(self):
         self.login_frame.pack_forget()
         self.register_frame.pack_forget()
         self.chat_frame.pack_forget()
         self.welcome_frame.pack(fill="both", expand=True)
 
-    def show_login_frame(self):
+    # =========================
+    #   LOGIN PAGE
+    # =========================
+    def build_login_frame(self):
+        label = tk.Label(self.login_frame, text="Login", font=("Helvetica", 16))
+        label.pack(pady=10)
+        self.login_username_var = tk.StringVar()
+        self.login_password_var = tk.StringVar()
+        tk.Label(self.login_frame, text="Username:").pack(pady=5)
+        tk.Entry(self.login_frame, textvariable=self.login_username_var).pack(pady=5)
+        tk.Label(self.login_frame, text="Password:").pack(pady=5)
+        tk.Entry(self.login_frame, textvariable=self.login_password_var, show="*").pack(pady=5)
+        tk.Button(self.login_frame, text="Submit", width=10, command=self.handle_login).pack(pady=5)
+        self.login_error_label = tk.Label(self.login_frame, text="", fg="red")
+        self.login_error_label.pack(pady=5)
+
+    def show_login_page(self):
         self.welcome_frame.pack_forget()
         self.register_frame.pack_forget()
-        self.login_error.config(text="")
-        self.login_user_var.set("")
-        self.login_pass_var.set("")
+        self.login_error_label.config(text="")
         self.login_frame.pack(fill="both", expand=True)
 
-    def show_register_frame(self):
+    def handle_login(self):
+        username = self.login_username_var.get().strip()
+        password = self.login_password_var.get().strip()
+        if not username or not password:
+            self.login_error_label.config(text="Please enter both username and password.")
+            return
+        threading.Thread(target=self.login_thread, args=(username, password), daemon=True).start()
+
+    def login_thread(self, username, password):
+        try:
+            self.channel = grpc.insecure_channel(f"{HOST}:{PORT}")
+            self.stub = chat_pb2_grpc.ChatStub(self.channel)
+            response = self.stub.Login(chat_pb2.LoginRequest(username=username, password=password))
+            if "Welcome" in response.server_message:
+                self.username = username
+                self.root.after(0, self.show_chat_page)
+            else:
+                self.root.after(0, lambda: self.login_error_label.config(text=response.server_message))
+                self.channel.close()
+                self.channel = None
+                self.stub = None
+        except Exception as e:
+            self.root.after(0, lambda: self.login_error_label.config(text="Login error: " + str(e)))
+            if self.channel:
+                self.channel.close()
+                self.channel = None
+                self.stub = None
+
+    # =========================
+    #   REGISTER PAGE
+    # =========================
+    def build_register_frame(self):
+        label = tk.Label(self.register_frame, text="Register", font=("Helvetica", 16))
+        label.pack(pady=10)
+        self.reg_username_var = tk.StringVar()
+        self.reg_password_var = tk.StringVar()
+        self.reg_confirm_var = tk.StringVar()
+        tk.Label(self.register_frame, text="Username:").pack(pady=5)
+        tk.Entry(self.register_frame, textvariable=self.reg_username_var).pack(pady=5)
+        tk.Label(self.register_frame, text="Password:").pack(pady=5)
+        tk.Entry(self.register_frame, textvariable=self.reg_password_var, show="*").pack(pady=5)
+        tk.Label(self.register_frame, text="Confirm Password:").pack(pady=5)
+        tk.Entry(self.register_frame, textvariable=self.reg_confirm_var, show="*").pack(pady=5)
+        tk.Button(self.register_frame, text="Submit", width=10, command=self.handle_register).pack(pady=5)
+        self.register_error_label = tk.Label(self.register_frame, text="", fg="red")
+        self.register_error_label.pack(pady=5)
+
+    def show_register_page(self):
         self.welcome_frame.pack_forget()
         self.login_frame.pack_forget()
-        self.reg_error.config(text="")
-        self.reg_user_var.set("")
-        self.reg_pass_var.set("")
-        self.reg_confirm_var.set("")
+        self.register_error_label.config(text="")
         self.register_frame.pack(fill="both", expand=True)
 
-    def show_chat_frame(self):
+    def handle_register(self):
+        username = self.reg_username_var.get().strip()
+        password = self.reg_password_var.get().strip()
+        confirm = self.reg_confirm_var.get().strip()
+        if not username or not password or not confirm:
+            self.register_error_label.config(text="Please fill in all fields.")
+            return
+        if password != confirm:
+            self.register_error_label.config(text="Passwords do not match.")
+            return
+        threading.Thread(target=self.register_thread, args=(username, password, confirm), daemon=True).start()
+
+    def register_thread(self, username, password, confirm):
+        try:
+            self.channel = grpc.insecure_channel(f"{HOST}:{PORT}")
+            self.stub = chat_pb2_grpc.ChatStub(self.channel)
+            response = self.stub.Register(chat_pb2.RegisterRequest(username=username, password=password, confirm_password=confirm))
+            if "successful" in response.server_message.lower():
+                self.username = username
+                self.root.after(0, self.show_chat_page)
+            else:
+                self.root.after(0, lambda: self.register_error_label.config(text=response.server_message))
+                self.channel.close()
+                self.channel = None
+                self.stub = None
+        except Exception as e:
+            self.root.after(0, lambda: self.register_error_label.config(text="Registration error: " + str(e)))
+            if self.channel:
+                self.channel.close()
+                self.channel = None
+                self.stub = None
+
+    # =========================
+    #   CHAT PAGE
+    # =========================
+    def build_chat_frame(self):
+        self.chat_display = scrolledtext.ScrolledText(
+            self.chat_frame, state='disabled', wrap='word', width=80, height=24
+        )
+        self.chat_display.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+        self.chat_display.tag_configure("right", justify="right")
+
+        self.input_frame = tk.Frame(self.chat_frame)
+        self.input_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        self.message_entry = tk.Entry(self.input_frame, width=70)
+        self.message_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.message_entry.bind("<Return>", self.send_message)
+        self.send_button = tk.Button(self.input_frame, text="Send", command=self.send_message)
+        self.send_button.pack(side=tk.LEFT, padx=(5, 0))
+
+    def show_chat_page(self):
         self.welcome_frame.pack_forget()
         self.login_frame.pack_forget()
         self.register_frame.pack_forget()
         self.chat_frame.pack(fill="both", expand=True)
 
-    # ---------------------------
-    #        LOGIN
-    # ---------------------------
-    def do_login(self):
-        u = self.login_user_var.get().strip()
-        p = self.login_pass_var.get().strip()
-        if not u or not p:
-            self.login_error.config(text="Enter username and password.")
+    def send_message(self, event=None):
+        """Handle user input from the chat text box."""
+        if not self.stub or not self.username:
+            return  # Not connected
+
+        message = self.message_entry.get().strip()
+        if not message:
+            return
+        self.message_entry.delete(0, tk.END)
+
+        # Check for recognized commands first
+        if message.lower() == "check":
+            self.append_message(message, sent_by_me=True)
+            # CheckMessages is a streaming RPC
+            try:
+                responses = self.stub.CheckMessages(
+                    chat_pb2.CheckMessagesRequest(username=self.username),
+                    metadata=(('username', self.username),)
+                )
+                for resp in responses:
+                    self.append_message(resp.server_message, sent_by_me=False)
+            except Exception as e:
+                self.append_message("Error: " + str(e), sent_by_me=False)
             return
 
-        # Send gRPC
-        req = chat_pb2.LoginRequest(username=u, password=p)
-        resp = self.stub.Login(req)
-        if "Welcome" in resp.server_message:
-            self.username = u
-            self.login_error.config(text="")
-            self.show_chat_frame()
-            self.append_message(resp.server_message)
-        else:
-            self.login_error.config(text=resp.server_message)
-
-    # ---------------------------
-    #       REGISTER
-    # ---------------------------
-    def do_register(self):
-        u = self.reg_user_var.get().strip()
-        p = self.reg_pass_var.get().strip()
-        c = self.reg_confirm_var.get().strip()
-        if not u or not p or not c:
-            self.reg_error.config(text="All fields required.")
+        elif message.lower() == "search":
+            self.append_message(message, sent_by_me=True)
+            response = self.stub.SearchUsers(
+                chat_pb2.SearchRequest(username=self.username),
+                metadata=(('username', self.username),)
+            )
+            self.append_message(response.server_message, sent_by_me=False)
+            if response.success and response.usernames:
+                # Show the list of found users
+                self.append_message("Users: " + ", ".join(response.usernames), sent_by_me=False)
             return
 
-        req = chat_pb2.RegisterRequest(username=u, password=p, confirm_password=c)
-        resp = self.stub.Register(req)
-        if "successful" in resp.server_message:
-            self.username = u
-            self.reg_error.config(text="")
-            self.show_chat_frame()
-            self.append_message(resp.server_message)
-        else:
-            self.reg_error.config(text=resp.server_message)
+        elif message.lower() == "delete":
+            # The server requires a confirmation == 'yes' to actually delete
+            self.append_message(message, sent_by_me=True)
+            response = self.stub.DeleteLastMessage(
+                chat_pb2.DeleteRequest(username=self.username, confirmation='yes'),
+                metadata=(('username', self.username),)
+            )
+            self.append_message(response.server_message, sent_by_me=False)
+            return
 
-    # ---------------------------
-    #       CHAT ACTIONS
-    # ---------------------------
-    def append_message(self, text, sent_by_me=False):
-        self.chat_display.config(state='normal')
-        self.chat_display.insert(tk.END, text + "\n")
-        self.chat_display.config(state='disabled')
+        elif message.lower() == "deactivate":
+            # The server requires a confirmation == 'yes'
+            self.append_message(message, sent_by_me=True)
+            response = self.stub.DeactivateAccount(
+                chat_pb2.DeactivateRequest(username=self.username, confirmation='yes'),
+                metadata=(('username', self.username),)
+            )
+            self.append_message(response.server_message, sent_by_me=False)
+            # If the account is removed, we can end the session
+            self.close_connection()
+            return
+
+        elif message.lower() == "logoff":
+            self.append_message(message, sent_by_me=True)
+            response = self.stub.Logoff(
+                chat_pb2.LogoffRequest(username=self.username),
+                metadata=(('username', self.username),)
+            )
+            self.append_message(response.server_message, sent_by_me=False)
+            self.close_connection()
+            return
+
+        elif message.startswith("@"):
+            # Direct message to @username
+            self.append_message(message, sent_by_me=True)
+            response = self.stub.SendMessage(
+                chat_pb2.GeneralMessage(command="sendmessage", message=message),
+                metadata=(('username', self.username),)
+            )
+            self.append_message(response.server_message, sent_by_me=False)
+            return
+
+        # If it's not a recognized command or '@', treat it as a normal message
+        # that you might want to store or broadcast. We'll just reuse SendMessage:
+        self.append_message(message, sent_by_me=True)
+        response = self.stub.SendMessage(
+            chat_pb2.GeneralMessage(command="sendmessage", message=message),
+            metadata=(('username', self.username),)
+        )
+        self.append_message(response.server_message, sent_by_me=False)
+
+    def append_message(self, message, sent_by_me=False):
+        """Append a message to the chat display."""
+        self.chat_display.configure(state='normal')
+        if sent_by_me:
+            self.chat_display.insert(tk.END, message + "\n", "right")
+        else:
+            self.chat_display.insert(tk.END, message + "\n")
+        self.chat_display.configure(state='disabled')
         self.chat_display.yview(tk.END)
 
-    def send_message(self):
-        """Sends whatever is in the msg_var as a DM. 
-           For a real chat, you'd parse an '@recipient' or something."""
-        msg = self.msg_var.get().strip()
-        if not msg or not self.username:
-            return
-        self.msg_var.set("")
-        # For simplicity, let's assume user typed: @bob Hi Bob
-        if msg.startswith("@"):
-            parts = msg.split(" ", 1)
-            if len(parts) < 2:
-                self.append_message("Invalid format. Use '@user <message>'.")
-                return
-            recipient = parts[0][1:]  # skip '@'
-            body = parts[1]
-            req = chat_pb2.SendMessageRequest(
-                sender=self.username,
-                recipient=recipient,
-                message_body=body
-            )
-            resp = self.stub.SendMessage(req)
-            self.append_message(f"[You -> {recipient}]: {body}", sent_by_me=True)
-            if not resp.success:
-                self.append_message(resp.server_message)
-        else:
-            self.append_message("To send a DM, use '@username message'.")
-
-    def check_messages(self):
-        if not self.username:
-            return
-
-        # For example, we might do "choice=1" to read, or "2" to skip
-        # or pass "sender=..." if we want to read from a specific user.
-        req = chat_pb2.CheckMessagesRequest(
-            username=self.username,
-            choice="1"  # means "I want to read messages"
-        )
-        # Server streaming => read responses in a thread
-        def stream_thread():
-            try:
-                for msg_res in self.stub.CheckMessages(req):
-                    self.receive_queue.put(msg_res.server_message)
-            except Exception as e:
-                self.receive_queue.put(f"CheckMessages error: {e}")
-
-        self.check_running = True
-        t = threading.Thread(target=stream_thread, daemon=True)
-        t.start()
-        self.poll_check_queue()
-
-    def poll_check_queue(self):
-        """Poll the queue for new server messages during check_messages streaming."""
-        while not self.receive_queue.empty():
-            msg = self.receive_queue.get()
-            self.append_message(msg)
-        if self.check_running:
-            self.root.after(200, self.poll_check_queue)
-
-    def do_logoff(self):
-        if not self.username:
-            return
-        req = chat_pb2.LogoffRequest(username=self.username)
-        resp = self.stub.Logoff(req)
-        self.append_message(resp.server_message)
+    def close_connection(self):
+        """Close the gRPC channel and reset client state."""
+        if self.channel:
+            self.channel.close()
+        self.channel = None
+        self.stub = None
         self.username = None
-        self.check_running = False
-        self.show_welcome_frame()
-
-    def delete_last_message(self):
-        if not self.username:
-            return
-        # For simplicity, always confirm 'yes'
-        req = chat_pb2.DeleteRequest(username=self.username, confirmation="yes")
-        resp = self.stub.DeleteLastMessage(req)
-        self.append_message(resp.server_message)
-
-    def deactivate_account(self):
-        if not self.username:
-            return
-        req = chat_pb2.DeactivateRequest(username=self.username, confirmation="yes")
-        resp = self.stub.DeactivateAccount(req)
-        self.append_message(resp.server_message)
-        self.username = None
-        self.check_running = False
-        self.show_welcome_frame()
+        self.chat_frame.pack_forget()
+        self.show_welcome_page()
 
     def on_close(self):
-        if self.username:
-            try:
-                _ = self.stub.Logoff(chat_pb2.LogoffRequest(username=self.username))
-            except:
-                pass
+        # Attempt a clean logoff
+        try:
+            if self.stub and self.username:
+                self.stub.Logoff(chat_pb2.LogoffRequest(username=self.username))
+        except:
+            pass
+        self.close_connection()
         self.root.destroy()
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     ChatClient()

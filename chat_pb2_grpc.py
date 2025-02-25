@@ -26,8 +26,7 @@ if _version_not_supported:
 
 
 class ChatStub(object):
-    """The Chat service definition
-    """
+    """Missing associated documentation comment in .proto file."""
 
     def __init__(self, channel):
         """Constructor.
@@ -36,104 +35,94 @@ class ChatStub(object):
             channel: A grpc.Channel.
         """
         self.Register = channel.unary_unary(
-                '/chat.Chat/Register',
+                '/Chat/Register',
                 request_serializer=chat__pb2.RegisterRequest.SerializeToString,
                 response_deserializer=chat__pb2.Response.FromString,
                 _registered_method=True)
         self.Login = channel.unary_unary(
-                '/chat.Chat/Login',
+                '/Chat/Login',
                 request_serializer=chat__pb2.LoginRequest.SerializeToString,
                 response_deserializer=chat__pb2.Response.FromString,
                 _registered_method=True)
         self.SendMessage = channel.unary_unary(
-                '/chat.Chat/SendMessage',
-                request_serializer=chat__pb2.SendMessageRequest.SerializeToString,
+                '/Chat/SendMessage',
+                request_serializer=chat__pb2.GeneralMessage.SerializeToString,
                 response_deserializer=chat__pb2.SendMessageResponse.FromString,
                 _registered_method=True)
         self.CheckMessages = channel.unary_stream(
-                '/chat.Chat/CheckMessages',
+                '/Chat/CheckMessages',
                 request_serializer=chat__pb2.CheckMessagesRequest.SerializeToString,
                 response_deserializer=chat__pb2.CheckMessagesResponse.FromString,
                 _registered_method=True)
         self.Logoff = channel.unary_unary(
-                '/chat.Chat/Logoff',
+                '/Chat/Logoff',
                 request_serializer=chat__pb2.LogoffRequest.SerializeToString,
                 response_deserializer=chat__pb2.Response.FromString,
                 _registered_method=True)
         self.SearchUsers = channel.unary_unary(
-                '/chat.Chat/SearchUsers',
+                '/Chat/SearchUsers',
                 request_serializer=chat__pb2.SearchRequest.SerializeToString,
                 response_deserializer=chat__pb2.SearchResponse.FromString,
                 _registered_method=True)
         self.DeleteLastMessage = channel.unary_unary(
-                '/chat.Chat/DeleteLastMessage',
+                '/Chat/DeleteLastMessage',
                 request_serializer=chat__pb2.DeleteRequest.SerializeToString,
                 response_deserializer=chat__pb2.Response.FromString,
                 _registered_method=True)
         self.DeactivateAccount = channel.unary_unary(
-                '/chat.Chat/DeactivateAccount',
+                '/Chat/DeactivateAccount',
                 request_serializer=chat__pb2.DeactivateRequest.SerializeToString,
                 response_deserializer=chat__pb2.Response.FromString,
                 _registered_method=True)
 
 
 class ChatServicer(object):
-    """The Chat service definition
-    """
+    """Missing associated documentation comment in .proto file."""
 
     def Register(self, request, context):
-        """Register with (username, password, confirm_password)
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def Login(self, request, context):
-        """Login with (username, password)
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def SendMessage(self, request, context):
-        """Send a direct message from one user to another
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def CheckMessages(self, request, context):
-        """Check messages (server-streaming):
-        The server can yield multiple CheckMessagesResponse messages
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def Logoff(self, request, context):
-        """Log off a user
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def SearchUsers(self, request, context):
-        """Search for users
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def DeleteLastMessage(self, request, context):
-        """Delete last unread message the user has sent
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def DeactivateAccount(self, request, context):
-        """Deactivate an account
-        """
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -153,7 +142,7 @@ def add_ChatServicer_to_server(servicer, server):
             ),
             'SendMessage': grpc.unary_unary_rpc_method_handler(
                     servicer.SendMessage,
-                    request_deserializer=chat__pb2.SendMessageRequest.FromString,
+                    request_deserializer=chat__pb2.GeneralMessage.FromString,
                     response_serializer=chat__pb2.SendMessageResponse.SerializeToString,
             ),
             'CheckMessages': grpc.unary_stream_rpc_method_handler(
@@ -183,15 +172,14 @@ def add_ChatServicer_to_server(servicer, server):
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'chat.Chat', rpc_method_handlers)
+            'Chat', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('chat.Chat', rpc_method_handlers)
+    server.add_registered_method_handlers('Chat', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
 class Chat(object):
-    """The Chat service definition
-    """
+    """Missing associated documentation comment in .proto file."""
 
     @staticmethod
     def Register(request,
@@ -207,7 +195,7 @@ class Chat(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.Chat/Register',
+            '/Chat/Register',
             chat__pb2.RegisterRequest.SerializeToString,
             chat__pb2.Response.FromString,
             options,
@@ -234,7 +222,7 @@ class Chat(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.Chat/Login',
+            '/Chat/Login',
             chat__pb2.LoginRequest.SerializeToString,
             chat__pb2.Response.FromString,
             options,
@@ -261,8 +249,8 @@ class Chat(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.Chat/SendMessage',
-            chat__pb2.SendMessageRequest.SerializeToString,
+            '/Chat/SendMessage',
+            chat__pb2.GeneralMessage.SerializeToString,
             chat__pb2.SendMessageResponse.FromString,
             options,
             channel_credentials,
@@ -288,7 +276,7 @@ class Chat(object):
         return grpc.experimental.unary_stream(
             request,
             target,
-            '/chat.Chat/CheckMessages',
+            '/Chat/CheckMessages',
             chat__pb2.CheckMessagesRequest.SerializeToString,
             chat__pb2.CheckMessagesResponse.FromString,
             options,
@@ -315,7 +303,7 @@ class Chat(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.Chat/Logoff',
+            '/Chat/Logoff',
             chat__pb2.LogoffRequest.SerializeToString,
             chat__pb2.Response.FromString,
             options,
@@ -342,7 +330,7 @@ class Chat(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.Chat/SearchUsers',
+            '/Chat/SearchUsers',
             chat__pb2.SearchRequest.SerializeToString,
             chat__pb2.SearchResponse.FromString,
             options,
@@ -369,7 +357,7 @@ class Chat(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.Chat/DeleteLastMessage',
+            '/Chat/DeleteLastMessage',
             chat__pb2.DeleteRequest.SerializeToString,
             chat__pb2.Response.FromString,
             options,
@@ -396,7 +384,7 @@ class Chat(object):
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/chat.Chat/DeactivateAccount',
+            '/Chat/DeactivateAccount',
             chat__pb2.DeactivateRequest.SerializeToString,
             chat__pb2.Response.FromString,
             options,

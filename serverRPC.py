@@ -9,10 +9,12 @@ import bcrypt
 
 import grpc
 from concurrent import futures
+
 import chat_pb2
 import chat_pb2_grpc
 
-parser = argparse.ArgumentParser(description="Start the chat server.")
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description="Start the chat server (gRPC).")
 parser.add_argument("--host", default=os.getenv("CHAT_SERVER_HOST", "0.0.0.0"), help="Server hostname or IP")
 parser.add_argument("--port", type=int, default=int(os.getenv("CHAT_SERVER_PORT", 65432)), help="Port number")
 args = parser.parse_args()
@@ -20,15 +22,17 @@ args = parser.parse_args()
 HOST = args.host
 PORT = args.port
 
+# Database connection function
 def connectsql():
     return pymysql.connect(
-        host=HOST,       # or "localhost"
+        host="localhost",  # adjust as needed
         user='root',
         password='',
         database='db262',
         cursorclass=pymysql.cursors.DictCursor
     )
 
+# Helper functions
 def checkRealUsername(username):
     with connectsql() as db:
         with db.cursor() as cur:
@@ -59,107 +63,109 @@ def checkRealPassword(username, plain_text):
             stored_hash = row['password']
     return bcrypt.checkpw(plain_text.encode('utf-8'), stored_hash.encode('utf-8'))
 
+# The gRPC service implementation
 class ChatService(chat_pb2_grpc.ChatServicer):
     def Register(self, request, context):
-        """Register a new user with (username, password, confirm_password)."""
         reg_username = request.username.strip()
         reg_password = request.password.strip()
         confirm_password = request.confirm_password.strip()
 
         if not reg_username or not reg_password or not confirm_password:
             return chat_pb2.Response(
-                command="register",
-                server_message="Please fill in all fields."
+                command="1",
+                server_message="Registration canceled: All fields are required."
             )
-
         if checkRealUsername(reg_username):
             return chat_pb2.Response(
-                command="register",
-                server_message="Username is already taken."
+                command="1",
+                server_message="Username taken. Please choose another."
             )
-
         if not checkValidPassword(reg_password):
             return chat_pb2.Response(
-                command="register",
-                server_message="Password must be >= 7 chars, have uppercase, digit, special char."
+                command="1",
+                server_message="Invalid password: Must be >=7 chars, include uppercase, digit, and special char."
             )
-
         if reg_password != confirm_password:
             return chat_pb2.Response(
-                command="register",
+                command="1",
                 server_message="Passwords do not match."
             )
-
-        # Insert into DB
+        hashed = hashPass(reg_password)
         try:
-            hashed = hashPass(reg_password)
             with connectsql() as db:
                 with db.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO users (username, password, active)
-                        VALUES (%s, %s, 1)
-                    """, (reg_username, hashed))
-                    db.commit()
+                    cur.execute("INSERT INTO users (username, password, active) VALUES (%s, %s, 1)", (reg_username, hashed))
+                db.commit()
             return chat_pb2.Response(
-                command="register",
-                server_message="Registration successful! You are now logged in."
+                command="1",
+                server_message="Registration successful. You are now logged in!"
             )
         except Exception:
             traceback.print_exc()
             return chat_pb2.Response(
-                command="register",
-                server_message="Server error. Could not register."
+                command="1",
+                server_message="Server error during registration."
             )
 
     def Login(self, request, context):
-        """Login with (username, password)."""
         username = request.username.strip()
         password = request.password.strip()
 
         if not checkRealUsername(username):
             return chat_pb2.Response(
-                command="login",
+                command="2",
                 server_message="User not found."
             )
-
         if not checkRealPassword(username, password):
             return chat_pb2.Response(
-                command="login",
+                command="2",
                 server_message="Incorrect password."
             )
-
-        # Mark active=1
+        # Mark user active
         with connectsql() as db:
             with db.cursor() as cur:
                 cur.execute("UPDATE users SET active=1 WHERE username=%s", (username,))
-                db.commit()
-
+            db.commit()
         return chat_pb2.Response(
-            command="login",
+            command="2",
             server_message=f"Welcome, {username}!"
         )
 
     def SendMessage(self, request, context):
-        """Sends a message to the DB. Doesn't do real-time push in this example."""
-        sender = request.sender.strip()
-        recipient = request.recipient.strip()
-        message_body = request.message_body.strip()
-
-        if not checkRealUsername(recipient):
+        # Expect the client to send a message starting with "@recipient message"
+        full_text = request.message.strip()
+        md = dict(context.invocation_metadata())
+        sender = md.get("username", "unknown")
+        if not full_text.startswith("@"):
+            return chat_pb2.SendMessageResponse(
+                success=False,
+                server_message="Message must start with '@username' for a direct message."
+            )
+        parts = full_text.split(" ", 1)
+        if len(parts) < 2:
+            return chat_pb2.SendMessageResponse(
+                success=False,
+                server_message="Invalid format. Use '@username message'."
+            )
+        target_username = parts[0][1:]
+        message = parts[1]
+        if not checkRealUsername(target_username):
             return chat_pb2.SendMessageResponse(
                 success=False,
                 server_message="Recipient does not exist."
             )
-
-        # Insert message
         try:
             with connectsql() as db:
                 with db.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO messages (receiver, sender, message, isread)
-                        VALUES (%s, %s, %s, 0)
-                    """, (recipient, sender, message_body))
+                    cur.execute(
+                        "INSERT INTO messages (receiver, sender, message, isread) VALUES (%s, %s, %s, 0)",
+                        (target_username, sender, message)
+                    )
                     db.commit()
+            return chat_pb2.SendMessageResponse(
+                success=True,
+                server_message=""
+            )
         except Exception:
             traceback.print_exc()
             return chat_pb2.SendMessageResponse(
@@ -167,19 +173,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 server_message="Error storing message."
             )
 
-        return chat_pb2.SendMessageResponse(
-            success=True,
-            server_message="Message sent successfully."
-        )
-
     def CheckMessages(self, request, context):
-        """
-        Server-streaming:
-        - We show how many unread messages
-        - If choice == "2", skip
-        - If choice == "1", check which senders, then which sender user wants
-        - This example is simplified but demonstrates streaming multiple responses
-        """
         username = request.username.strip()
         choice = request.choice.strip()
         chosen_sender = request.sender.strip() if request.sender else ""
@@ -193,7 +187,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
 
         with connectsql() as db:
             with db.cursor() as cur:
-                # Count unread
+                # Count unread messages
                 cur.execute("""
                     SELECT COUNT(*) AS cnt
                     FROM messages
@@ -209,21 +203,27 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                     )
                     return
 
-                # We have some unread
-                yield chat_pb2.CheckMessagesResponse(
-                    command="checkmessages",
-                    server_message=f"You have {unread_count} unread messages."
-                )
+                else:
+                    yield chat_pb2.CheckMessagesResponse(
+                        command="checkmessages",
+                        server_message=(
+                            f" ------------------------------------------\n"
+                            f"| You have {unread_count} unread messages.              |\n"
+                            f"| Type '1' to read them, or '2' to skip    |\n"
+                            f"| and send new messages.                   |\n"
+                            f" ------------------------------------------\n"
+                        )
+                    )
 
-                # If the user chooses "2" => skip reading
+                # If the user chooses "2", skip reading
                 if choice == "2":
                     yield chat_pb2.CheckMessagesResponse(
                         command="checkmessages",
                         server_message="Skipping reading messages."
                     )
                     return
-
-                # Otherwise list senders
+                
+                # Otherwise, list senders of unread messages
                 cur.execute("""
                     SELECT sender, COUNT(*) as num
                     FROM messages
@@ -244,7 +244,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                     server_message=f"Unread from:\n{senders_str}"
                 )
 
-                # If user specified a sender to read from:
+                # If the user specified a sender, stream messages in batches of 5
                 if chosen_sender:
                     cur.execute("""
                         SELECT messageid, sender, message, datetime
@@ -260,7 +260,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                         )
                         return
 
-                    # Stream them in batches of 5
                     batch_size = 5
                     for i in range(0, len(msgs), batch_size):
                         batch = msgs[i:i+batch_size]
@@ -272,8 +271,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                                 sender=m['sender'],
                                 message_body=m['message']
                             )
-
-                        # Mark as read
+                        # Mark the current batch as read
                         batch_ids = [m['messageid'] for m in batch]
                         placeholders = ','.join(['%s'] * len(batch_ids))
                         cur.execute(f"""
@@ -282,23 +280,19 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                             WHERE messageid IN ({placeholders})
                         """, batch_ids)
                         db.commit()
-
                         yield chat_pb2.CheckMessagesResponse(
                             command="checkmessages",
                             server_message="(This batch marked as read.)"
                         )
-
-                        # If more left, you could prompt the client to continue
                     return
 
-                # If no chosen_sender, yield prompt
+                # If no chosen sender was specified, prompt the client to specify one
                 yield chat_pb2.CheckMessagesResponse(
                     command="checkmessages",
                     server_message="Please specify which sender to read from."
                 )
 
     def Logoff(self, request, context):
-        """Mark user as inactive."""
         username = request.username.strip()
         if not username:
             return chat_pb2.Response(
@@ -309,7 +303,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             with connectsql() as db:
                 with db.cursor() as cur:
                     cur.execute("UPDATE users SET active=0 WHERE username=%s", (username,))
-                    db.commit()
+                db.commit()
             return chat_pb2.Response(
                 command="logoff",
                 server_message=f"{username} has been logged off."
@@ -322,7 +316,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             )
 
     def SearchUsers(self, request, context):
-        """Return a list of all users (excluding self if desired)."""
         username = request.username.strip()
         try:
             with connectsql() as db:
@@ -344,7 +337,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             )
 
     def DeleteLastMessage(self, request, context):
-        """Delete last unread message from this user if confirmation == 'yes'."""
         username = request.username.strip()
         confirmation = request.confirmation.strip().lower()
         if confirmation != 'yes':
@@ -355,13 +347,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
         try:
             with connectsql() as db:
                 with db.cursor() as cur:
-                    cur.execute("""
-                        SELECT messageid
-                        FROM messages
-                        WHERE sender=%s AND isread=0
-                        ORDER BY messageid DESC
-                        LIMIT 1
-                    """, (username,))
+                    cur.execute("SELECT messageid FROM messages WHERE sender=%s AND isread=0 ORDER BY messageid DESC LIMIT 1", (username,))
                     row = cur.fetchone()
                     if not row:
                         return chat_pb2.Response(
@@ -383,7 +369,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             )
 
     def DeactivateAccount(self, request, context):
-        """Permanently remove user & messages if confirmation == 'yes'."""
         username = request.username.strip()
         confirmation = request.confirmation.strip().lower()
         if confirmation != 'yes':
@@ -394,11 +379,9 @@ class ChatService(chat_pb2_grpc.ChatServicer):
         try:
             with connectsql() as db:
                 with db.cursor() as cur:
-                    # Remove all sent messages
                     cur.execute("DELETE FROM messages WHERE sender=%s", (username,))
-                    # Remove user
                     cur.execute("DELETE FROM users WHERE username=%s", (username,))
-                    db.commit()
+                db.commit()
             return chat_pb2.Response(
                 command="deactivate",
                 server_message="Your account and sent messages are removed."
@@ -410,15 +393,14 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 server_message="Error deactivating account."
             )
 
-def start_server():
+def serve():
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     chat_pb2_grpc.add_ChatServicer_to_server(ChatService(), server)
     address = f"{HOST}:{PORT}"
     server.add_insecure_port(address)
-
     server.start()
-    print(f"Server started, listening on {address}")
+    print(f"Server started on {address}")
     server.wait_for_termination()
 
 if __name__ == "__main__":
-    start_server()
+    serve()
