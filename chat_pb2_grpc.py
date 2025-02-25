@@ -49,7 +49,7 @@ class ChatStub(object):
                 request_serializer=chat__pb2.GeneralMessage.SerializeToString,
                 response_deserializer=chat__pb2.SendMessageResponse.FromString,
                 _registered_method=True)
-        self.CheckMessages = channel.unary_stream(
+        self.CheckMessages = channel.stream_stream(
                 '/Chat/CheckMessages',
                 request_serializer=chat__pb2.CheckMessagesRequest.SerializeToString,
                 response_deserializer=chat__pb2.CheckMessagesResponse.FromString,
@@ -64,12 +64,12 @@ class ChatStub(object):
                 request_serializer=chat__pb2.SearchRequest.SerializeToString,
                 response_deserializer=chat__pb2.SearchResponse.FromString,
                 _registered_method=True)
-        self.DeleteLastMessage = channel.unary_unary(
+        self.DeleteLastMessage = channel.stream_stream(
                 '/Chat/DeleteLastMessage',
                 request_serializer=chat__pb2.DeleteRequest.SerializeToString,
                 response_deserializer=chat__pb2.Response.FromString,
                 _registered_method=True)
-        self.DeactivateAccount = channel.unary_unary(
+        self.DeactivateAccount = channel.stream_stream(
                 '/Chat/DeactivateAccount',
                 request_serializer=chat__pb2.DeactivateRequest.SerializeToString,
                 response_deserializer=chat__pb2.Response.FromString,
@@ -97,8 +97,9 @@ class ChatServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def CheckMessages(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+    def CheckMessages(self, request_iterator, context):
+        """Bidirectional streaming for interactive message checking
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -115,13 +116,14 @@ class ChatServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def DeleteLastMessage(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+    def DeleteLastMessage(self, request_iterator, context):
+        """Bidirectional streaming for delete and deactivation confirmations
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def DeactivateAccount(self, request, context):
+    def DeactivateAccount(self, request_iterator, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -145,7 +147,7 @@ def add_ChatServicer_to_server(servicer, server):
                     request_deserializer=chat__pb2.GeneralMessage.FromString,
                     response_serializer=chat__pb2.SendMessageResponse.SerializeToString,
             ),
-            'CheckMessages': grpc.unary_stream_rpc_method_handler(
+            'CheckMessages': grpc.stream_stream_rpc_method_handler(
                     servicer.CheckMessages,
                     request_deserializer=chat__pb2.CheckMessagesRequest.FromString,
                     response_serializer=chat__pb2.CheckMessagesResponse.SerializeToString,
@@ -160,12 +162,12 @@ def add_ChatServicer_to_server(servicer, server):
                     request_deserializer=chat__pb2.SearchRequest.FromString,
                     response_serializer=chat__pb2.SearchResponse.SerializeToString,
             ),
-            'DeleteLastMessage': grpc.unary_unary_rpc_method_handler(
+            'DeleteLastMessage': grpc.stream_stream_rpc_method_handler(
                     servicer.DeleteLastMessage,
                     request_deserializer=chat__pb2.DeleteRequest.FromString,
                     response_serializer=chat__pb2.Response.SerializeToString,
             ),
-            'DeactivateAccount': grpc.unary_unary_rpc_method_handler(
+            'DeactivateAccount': grpc.stream_stream_rpc_method_handler(
                     servicer.DeactivateAccount,
                     request_deserializer=chat__pb2.DeactivateRequest.FromString,
                     response_serializer=chat__pb2.Response.SerializeToString,
@@ -263,7 +265,7 @@ class Chat(object):
             _registered_method=True)
 
     @staticmethod
-    def CheckMessages(request,
+    def CheckMessages(request_iterator,
             target,
             options=(),
             channel_credentials=None,
@@ -273,8 +275,8 @@ class Chat(object):
             wait_for_ready=None,
             timeout=None,
             metadata=None):
-        return grpc.experimental.unary_stream(
-            request,
+        return grpc.experimental.stream_stream(
+            request_iterator,
             target,
             '/Chat/CheckMessages',
             chat__pb2.CheckMessagesRequest.SerializeToString,
@@ -344,7 +346,7 @@ class Chat(object):
             _registered_method=True)
 
     @staticmethod
-    def DeleteLastMessage(request,
+    def DeleteLastMessage(request_iterator,
             target,
             options=(),
             channel_credentials=None,
@@ -354,8 +356,8 @@ class Chat(object):
             wait_for_ready=None,
             timeout=None,
             metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
+        return grpc.experimental.stream_stream(
+            request_iterator,
             target,
             '/Chat/DeleteLastMessage',
             chat__pb2.DeleteRequest.SerializeToString,
@@ -371,7 +373,7 @@ class Chat(object):
             _registered_method=True)
 
     @staticmethod
-    def DeactivateAccount(request,
+    def DeactivateAccount(request_iterator,
             target,
             options=(),
             channel_credentials=None,
@@ -381,8 +383,8 @@ class Chat(object):
             wait_for_ready=None,
             timeout=None,
             metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
+        return grpc.experimental.stream_stream(
+            request_iterator,
             target,
             '/Chat/DeactivateAccount',
             chat__pb2.DeactivateRequest.SerializeToString,

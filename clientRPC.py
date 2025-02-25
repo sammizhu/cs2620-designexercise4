@@ -14,7 +14,6 @@ parser = argparse.ArgumentParser(description="Start the chat client (gRPC).")
 parser.add_argument("--host", default=os.getenv("CHAT_SERVER_HOST", "127.0.0.1"), help="Server hostname or IP")
 parser.add_argument("--port", type=int, default=int(os.getenv("CHAT_SERVER_PORT", 65432)), help="Port number")
 args = parser.parse_args()
-
 HOST = args.host
 PORT = args.port
 
@@ -25,6 +24,10 @@ class ChatClient:
         self.username = None
         self.stub = None
         self.channel = None
+        # When in a bidirectional session, this flag is set to the current command ("check", "delete", "deactivate")
+        self.active_bidi = None
+        # Queue to hold user responses during a bidi conversation
+        self.bidi_queue = None
 
         # Create UI pages
         self.welcome_frame = tk.Frame(self.root)
@@ -190,66 +193,45 @@ class ChatClient:
         self.chat_frame.pack(fill="both", expand=True)
 
     def send_message(self, event=None):
-        """Handle user input from the chat text box."""
-        if not self.stub or not self.username:
-            return  # Not connected
-
         message = self.message_entry.get().strip()
         if not message:
             return
         self.message_entry.delete(0, tk.END)
-
-        # Check for recognized commands first
-        if message.lower() == "check":
+        
+        # If we are in a bidirectional session, send the input to the active stream
+        if self.active_bidi:
+            if self.bidi_queue:
+                self.bidi_queue.put(message)
             self.append_message(message, sent_by_me=True)
-            # CheckMessages is a streaming RPC
-            try:
-                responses = self.stub.CheckMessages(
-                    chat_pb2.CheckMessagesRequest(username=self.username),
-                    metadata=(('username', self.username),)
-                )
-                for resp in responses:
-                    self.append_message(resp.server_message, sent_by_me=False)
-            except Exception as e:
-                self.append_message("Error: " + str(e), sent_by_me=False)
             return
 
-        elif message.lower() == "search":
-            self.append_message(message, sent_by_me=True)
+        # Regular message handling:
+        self.append_message(message, sent_by_me=True)
+
+        # Check for commands
+        if message.lower() == "check":
+            threading.Thread(target=self.check_messages_stream, daemon=True).start()
+            return
+
+        if message.lower() == "delete":
+            threading.Thread(target=self.delete_last_message_stream, daemon=True).start()
+            return
+
+        if message.lower() == "deactivate":
+            threading.Thread(target=self.deactivate_account_stream, daemon=True).start()
+            return
+
+        if message.lower() == "search":
             response = self.stub.SearchUsers(
                 chat_pb2.SearchRequest(username=self.username),
                 metadata=(('username', self.username),)
             )
             self.append_message(response.server_message, sent_by_me=False)
             if response.success and response.usernames:
-                # Show the list of found users
                 self.append_message("Users: " + ", ".join(response.usernames), sent_by_me=False)
             return
 
-        elif message.lower() == "delete":
-            # The server requires a confirmation == 'yes' to actually delete
-            self.append_message(message, sent_by_me=True)
-            response = self.stub.DeleteLastMessage(
-                chat_pb2.DeleteRequest(username=self.username, confirmation='yes'),
-                metadata=(('username', self.username),)
-            )
-            self.append_message(response.server_message, sent_by_me=False)
-            return
-
-        elif message.lower() == "deactivate":
-            # The server requires a confirmation == 'yes'
-            self.append_message(message, sent_by_me=True)
-            response = self.stub.DeactivateAccount(
-                chat_pb2.DeactivateRequest(username=self.username, confirmation='yes'),
-                metadata=(('username', self.username),)
-            )
-            self.append_message(response.server_message, sent_by_me=False)
-            # If the account is removed, we can end the session
-            self.close_connection()
-            return
-
-        elif message.lower() == "logoff":
-            self.append_message(message, sent_by_me=True)
+        if message.lower() == "logoff":
             response = self.stub.Logoff(
                 chat_pb2.LogoffRequest(username=self.username),
                 metadata=(('username', self.username),)
@@ -258,9 +240,7 @@ class ChatClient:
             self.close_connection()
             return
 
-        elif message.startswith("@"):
-            # Direct message to @username
-            self.append_message(message, sent_by_me=True)
+        if message.startswith("@"):
             response = self.stub.SendMessage(
                 chat_pb2.GeneralMessage(command="sendmessage", message=message),
                 metadata=(('username', self.username),)
@@ -268,17 +248,85 @@ class ChatClient:
             self.append_message(response.server_message, sent_by_me=False)
             return
 
-        # If it's not a recognized command or '@', treat it as a normal message
-        # that you might want to store or broadcast. We'll just reuse SendMessage:
-        self.append_message(message, sent_by_me=True)
+        # Default: send as a normal message via SendMessage
         response = self.stub.SendMessage(
             chat_pb2.GeneralMessage(command="sendmessage", message=message),
             metadata=(('username', self.username),)
         )
         self.append_message(response.server_message, sent_by_me=False)
 
+    def check_messages_stream(self):
+        self.active_bidi = "check"
+        self.bidi_queue = queue.Queue()
+        def request_generator():
+            # First send the username only
+            yield chat_pb2.CheckMessagesRequest(username=self.username)
+            # Then wait for user input from the bidi_queue
+            while True:
+                try:
+                    user_input = self.bidi_queue.get(timeout=30)
+                    # If the input is "1" or "2", assume it's the choice; otherwise, treat it as sender.
+                    if user_input in ("1", "2"):
+                        yield chat_pb2.CheckMessagesRequest(username=self.username, choice=user_input)
+                    else:
+                        yield chat_pb2.CheckMessagesRequest(username=self.username, sender=user_input)
+                except queue.Empty:
+                    break
+        try:
+            responses = self.stub.CheckMessages(request_generator(), metadata=(('username', self.username),))
+            for resp in responses:
+                self.append_message(resp.server_message, sent_by_me=False)
+        except Exception as e:
+            self.append_message("Error in check_messages_stream: " + str(e), sent_by_me=False)
+        finally:
+            self.active_bidi = None
+
+    def delete_last_message_stream(self):
+        self.active_bidi = "delete"
+        self.bidi_queue = queue.Queue()
+        def request_gen():
+            # Initial request with username only
+            yield chat_pb2.DeleteRequest(username=self.username, confirmation="")
+            while True:
+                try:
+                    user_input = self.bidi_queue.get(timeout=30)
+                    yield chat_pb2.DeleteRequest(username=self.username, confirmation=user_input.lower())
+                    break
+                except queue.Empty:
+                    break
+        try:
+            responses = self.stub.DeleteLastMessage(request_gen(), metadata=(('username', self.username),))
+            for resp in responses:
+                self.append_message(resp.server_message, sent_by_me=False)
+        except Exception as e:
+            self.append_message("Error in delete_last_message_stream: " + str(e), sent_by_me=False)
+        finally:
+            self.active_bidi = None
+
+    def deactivate_account_stream(self):
+        self.active_bidi = "deactivate"
+        self.bidi_queue = queue.Queue()
+        def request_gen():
+            yield chat_pb2.DeactivateRequest(username=self.username, confirmation="")
+            while True:
+                try:
+                    user_input = self.bidi_queue.get(timeout=30)
+                    yield chat_pb2.DeactivateRequest(username=self.username, confirmation=user_input.lower())
+                    break
+                except queue.Empty:
+                    break
+        try:
+            responses = self.stub.DeactivateAccount(request_gen(), metadata=(('username', self.username),))
+            for resp in responses:
+                self.append_message(resp.server_message, sent_by_me=False)
+                if "removed" in resp.server_message:
+                    self.close_connection()
+        except Exception as e:
+            self.append_message("Error in deactivate_account_stream: " + str(e), sent_by_me=False)
+        finally:
+            self.active_bidi = None
+
     def append_message(self, message, sent_by_me=False):
-        """Append a message to the chat display."""
         self.chat_display.configure(state='normal')
         if sent_by_me:
             self.chat_display.insert(tk.END, message + "\n", "right")
@@ -288,7 +336,6 @@ class ChatClient:
         self.chat_display.yview(tk.END)
 
     def close_connection(self):
-        """Close the gRPC channel and reset client state."""
         if self.channel:
             self.channel.close()
         self.channel = None
@@ -298,11 +345,10 @@ class ChatClient:
         self.show_welcome_page()
 
     def on_close(self):
-        # Attempt a clean logoff
         try:
             if self.stub and self.username:
                 self.stub.Logoff(chat_pb2.LogoffRequest(username=self.username))
-        except:
+        except Exception:
             pass
         self.close_connection()
         self.root.destroy()
