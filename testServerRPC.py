@@ -548,7 +548,7 @@ class TestIntegrationFlow(unittest.TestCase):
 # Regression Tests
 class TestRegressionFlow(unittest.TestCase):
     """
-    Baseline payload sizes (in bytes) based on previous runs to serve as compairson point for regression tests
+    Baseline payload sizes (in bytes) based on previous runs to serve as comparison point for regression tests
     IDEA: By comparing current payload sizes against these baselines, we can detect unintended changes or regressions 
     in the client–server protocol or the message serialization --> tests will fail if the sizes deviate significantly
     """

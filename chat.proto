@@ -64,9 +64,9 @@ message SearchRequest {
     string username = 1;
 }
 message SearchResponse {
-    bool   success        = 1;
+    bool            success   = 1;
     repeated string usernames = 2;
-    string server_message = 3;
+    string     server_message = 3;
 }
 
 // Delete last message (bidirectional)

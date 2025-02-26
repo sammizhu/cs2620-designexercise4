@@ -204,7 +204,6 @@ class ChatClient:
             for resp in responses:
                 self.append_message(resp.server_message, sent_by_me=False)
                 if resp.server_message == "Skipping reading messages." or resp.server_message == "Invalid choice. Aborting.":
-                    result_generator.cancel()
                     sys.exit(0)
                     break
         except grpc.RpcError as err:
