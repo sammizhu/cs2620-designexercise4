@@ -124,7 +124,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             with db.cursor() as cur:
                 cur.execute("SELECT active FROM users WHERE username=%s", (username,))
                 activeStatus = cur.fetchone()
-                if activeStatus == 1:
+                if activeStatus['active'] == 1:
                     return chat_pb2.Response(
                         command="2",
                         server_message="You are already logged in. Please log out before logging in again."
