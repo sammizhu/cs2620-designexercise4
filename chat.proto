@@ -10,7 +10,6 @@ service Chat {
     rpc DeleteLastMessage(stream DeleteRequest) returns (stream Response);
     rpc DeactivateAccount(stream DeactivateRequest) returns (stream Response);
     rpc ReceiveMessages(ReceiveRequest) returns (stream ReceiveResponse);
-
 }
 
 // Registration
