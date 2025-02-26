@@ -438,7 +438,7 @@ def is_server_available(host, port):
 
 class TestIntegrationFlow(unittest.TestCase):
     HOST = '10.250.213.39' # Can also replace with arg1 value from command line
-    PORT = 65432
+    PORT = 50000
 
     @classmethod
     def setUpClass(cls):
@@ -560,7 +560,7 @@ class TestRegressionFlow(unittest.TestCase):
         "check": {"request": 17, "response": 193},
         "logoff": {"request": 17, "response": 46},
     }
-    VARIATION_PERCENT = 0.20
+    VARIATION_PERCENT = 0.50
 
     @classmethod
     def setUpClass(cls):

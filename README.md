@@ -129,6 +129,7 @@ coverage report -m
 
 ServerRPC:
 ```
+python serverRPC.py --host 10.250.213.39 --port 50000
 coverage run --source=serverRPC testServerRPC.py
 coverage report -m
 ```
