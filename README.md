@@ -127,6 +127,13 @@ coverage report -m
 ```
 ![alt text](img/serverJSON.png)
 
+ServerRPC:
+```
+coverage run --source=serverRPC testServerRPC.py
+coverage report -m
+```
+![alt text](img/serverRPC.png)
+
 ### Client
 ClientCustom:
 ```
@@ -141,3 +148,10 @@ coverage run --source=clientJson testClientJSON.py
 coverage report -m
 ```
 ![alt text](img/clientJSON.png)
+
+ClientRPC:
+```
+  coverage run --source=clientRPC testClientRPC.py
+  coverage report -m
+```
+![alt text](img/clientRPC.png)
