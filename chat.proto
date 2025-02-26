@@ -1,64 +1,93 @@
 syntax = "proto3";
 
 service Chat {
-    // Simple RPCs where client sends a request to the server
-    // using stub and waits for a response to come back
+    rpc Register(RegisterRequest) returns (Response);
+    rpc Login(LoginRequest) returns (Response);
+    rpc SendMessage(GeneralMessage) returns (SendMessageResponse);
+    rpc CheckMessages(stream CheckMessagesRequest) returns (stream CheckMessagesResponse);
+    rpc Logoff(LogoffRequest) returns (Response);
+    rpc SearchUsers(SearchRequest) returns (SearchResponse);
+    rpc DeleteLastMessage(stream DeleteRequest) returns (stream Response);
+    rpc DeactivateAccount(stream DeactivateRequest) returns (stream Response);
+    rpc ReceiveMessages(ReceiveRequest) returns (stream ReceiveResponse);
 
-    rpc SendMessage(GeneralMessage) returns (Response) {}
-
-    rpc SendUsername(Username) returns (Response) {}
-
-    rpc SendPassword(Password) returns (Response) {}
 }
 
-// Client sending to server
+// Registration
+message RegisterRequest {
+    string username         = 1;
+    string password         = 2;
+    string confirm_password = 3;
+}
 
+// Login
+message LoginRequest {
+    string username = 1;
+    string password = 2;
+}
+
+// Sending messages
 message GeneralMessage {
     string command = 1;
     string message = 2;
 }
-
-message Username {
-    string command = 1;
-    string username = 2;
-}
-
-message Password {
-    string command = 1;
-    string password = 2;
-}
-
-message Choice {
-    string choice = 1;
-}
-
-message Sender {
-    string sender = 1;
-}
-
-message Data {
-    string data = 1;
-}
-
-// Response message from the server
-
-message Response {
-    string command = 1;
+message SendMessageResponse {
+    bool   success        = 1;
     string server_message = 2;
 }
 
-// Server to clients
+// Generic response
+message Response {
+    string command        = 1;
+    string server_message = 2;
+}
 
+// CheckMessages bidirectional streaming
 message CheckMessagesRequest {
     string username = 1;
-    string choice = 2;
-    string sender = 3;
+    string choice   = 2;  // "1" to read, "2" to skip
+    string sender   = 3;  // the sender's name when prompted
+}
+message CheckMessagesResponse {
+    string command        = 1;
+    string server_message = 2;
+    string sender         = 3;
+    string message_body   = 4;
 }
 
-message CheckMessagesResponse {
-    string command = 1;
-    string server_message = 2;
-    string sender = 3;
-    string message_body = 4;
-    repeated string messages = 5;
+// Logoff
+message LogoffRequest {
+    string username = 1;
+}
+
+// Searching
+message SearchRequest {
+    string username = 1;
+}
+message SearchResponse {
+    bool   success        = 1;
+    repeated string usernames = 2;
+    string server_message = 3;
+}
+
+// Delete last message (bidirectional)
+message DeleteRequest {
+    string username     = 1;
+    string confirmation = 2;
+}
+
+// Deactivate account (bidirectional)
+message DeactivateRequest {
+    string username     = 1;
+    string confirmation = 2;
+}
+
+message ReceiveRequest {
+    string username = 1;
+}
+
+message ReceiveResponse {
+    string sender = 1;
+    string message = 2;
+    string timestamp = 3;
 }
