@@ -229,12 +229,12 @@ class ChatClient:
         self.bidi_queue = queue.Queue()
         def request_gen():
             # Step 1: Trigger the history prompt by sending an initial request with empty confirmation.
-            yield chat_pb2.DeactivateRequest(username=self.username, confirmation="")
+            yield chat_pb2.HistoryRequest(username=self.username, confirmation="")
             # Step 2: Wait for user's input for the userID 
             confirmation = ""
             while not confirmation:
                 confirmation = self.bidi_queue.get().strip()
-            yield chat_pb2.DeactivateRequest(username=self.username, confirmation=confirmation.lower())
+            yield chat_pb2.HistoryRequest(username=self.username, confirmation=confirmation.lower())
         try:
             responses = self.stub.History(request_gen(), metadata=(('username', self.username),))
             for resp in responses:

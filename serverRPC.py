@@ -334,8 +334,8 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                         msgs_sent = cur.fetchall()
                         cur.execute("SELECT * FROM messages WHERE sender=%s AND receiver=%s", (confirmation, username))
                         msgs_recieved = cur.fetchall()
-                msgs = msgs_sent + list(msgs_recieved)  # Ensure msgs_received is a list
-                msgs_sorted = sorted(msgs, key=lambda x: x['datetime'])  # Sort by timestamp
+                msgs = msgs_sent + list(msgs_recieved)  
+                msgs_sorted = sorted(msgs, key=lambda x: x['datetime']) 
                 chat_history = "\n".join([f"{m['datetime']} {m['sender']}: {m['message']}" for m in msgs_sorted])
                 yield chat_pb2.Response(
                     command="history",
