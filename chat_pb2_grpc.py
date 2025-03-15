@@ -64,6 +64,11 @@ class ChatStub(object):
                 request_serializer=chat__pb2.SearchRequest.SerializeToString,
                 response_deserializer=chat__pb2.SearchResponse.FromString,
                 _registered_method=True)
+        self.History = channel.stream_stream(
+                '/Chat/History',
+                request_serializer=chat__pb2.HistoryRequest.SerializeToString,
+                response_deserializer=chat__pb2.Response.FromString,
+                _registered_method=True)
         self.DeleteLastMessage = channel.stream_stream(
                 '/Chat/DeleteLastMessage',
                 request_serializer=chat__pb2.DeleteRequest.SerializeToString,
@@ -120,6 +125,12 @@ class ChatServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def History(self, request_iterator, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def DeleteLastMessage(self, request_iterator, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -170,6 +181,11 @@ def add_ChatServicer_to_server(servicer, server):
                     servicer.SearchUsers,
                     request_deserializer=chat__pb2.SearchRequest.FromString,
                     response_serializer=chat__pb2.SearchResponse.SerializeToString,
+            ),
+            'History': grpc.stream_stream_rpc_method_handler(
+                    servicer.History,
+                    request_deserializer=chat__pb2.HistoryRequest.FromString,
+                    response_serializer=chat__pb2.Response.SerializeToString,
             ),
             'DeleteLastMessage': grpc.stream_stream_rpc_method_handler(
                     servicer.DeleteLastMessage,
@@ -349,6 +365,33 @@ class Chat(object):
             '/Chat/SearchUsers',
             chat__pb2.SearchRequest.SerializeToString,
             chat__pb2.SearchResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def History(request_iterator,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.stream_stream(
+            request_iterator,
+            target,
+            '/Chat/History',
+            chat__pb2.HistoryRequest.SerializeToString,
+            chat__pb2.Response.FromString,
             options,
             channel_credentials,
             insecure,

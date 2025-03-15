@@ -224,6 +224,27 @@ class ChatClient:
         except Exception as e:
             self.append_message("Error in receive_messages_stream: " + str(e), sent_by_me=False)
 
+    def history_messages_stream(self):
+        self.active_bidi = "history"
+        self.bidi_queue = queue.Queue()
+        def request_gen():
+            # Step 1: Trigger the history prompt by sending an initial request with empty confirmation.
+            yield chat_pb2.DeactivateRequest(username=self.username, confirmation="")
+            # Step 2: Wait for user's input for the userID 
+            confirmation = ""
+            while not confirmation:
+                confirmation = self.bidi_queue.get().strip()
+            yield chat_pb2.DeactivateRequest(username=self.username, confirmation=confirmation.lower())
+        try:
+            responses = self.stub.History(request_gen(), metadata=(('username', self.username),))
+            for resp in responses:
+                self.append_message(resp.server_message, sent_by_me=False)
+        except grpc.RpcError as e:
+            self.append_message("Error in history_messages_stream: " + str(e), sent_by_me=False)
+        finally:
+            self.active_bidi = None
+        
+
     def delete_last_message_stream(self):
         self.active_bidi = "delete"
         self.bidi_queue = queue.Queue()
@@ -293,6 +314,9 @@ class ChatClient:
             self.append_message(response.server_message, sent_by_me=False)
             if response.success and response.usernames:
                 self.append_message("Users: " + ", ".join(response.usernames), sent_by_me=False)
+            return
+        if message.lower() == "history":
+            threading.Thread(target=self.history_messages_stream, daemon=True).start()
             return
         if message.lower() == "logoff":
             response = self.stub.Logoff(chat_pb2.LogoffRequest(username=self.username),

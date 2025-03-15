@@ -313,6 +313,47 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 command="checkmessages",
                 server_message="Error: " + str(e)
             )
+    
+    def History(self, request_iterator, context):
+        # given a userID, can see all of the chat history with that specific user
+        try:
+            yield chat_pb2.Response(
+                command="history",
+                server_message="Enter userID of the user whose chat history you'd like to view:"
+            )
+            req_iter = iter(request_iterator)
+            confirmation = ""
+            while not confirmation:
+                req = next(req_iter)
+                confirmation = req.confirmation.strip().lower()
+            username = req.username.strip()
+            if confirmation:
+                with connectsql() as db:
+                    with db.cursor() as cur:
+                        cur.execute("SELECT * FROM messages WHERE sender=%s AND receiver=%s", (username, confirmation))
+                        msgs_sent = cur.fetchall()
+                        cur.execute("SELECT * FROM messages WHERE sender=%s AND receiver=%s", (confirmation, username))
+                        msgs_recieved = cur.fetchall()
+                msgs = msgs_sent + list(msgs_recieved)  # Ensure msgs_received is a list
+                msgs_sorted = sorted(msgs, key=lambda x: x['datetime'])  # Sort by timestamp
+                chat_history = "\n".join([f"{m['datetime']} {m['sender']}: {m['message']}" for m in msgs_sorted])
+                yield chat_pb2.Response(
+                    command="history",
+                    server_message=chat_history if chat_history else "No message history available."
+                )
+            else:
+                yield chat_pb2.Response(
+                    command="history",
+                    server_message="History view canceled."
+                )
+        except Exception as e:
+            traceback.print_exc()
+            yield chat_pb2.Response(
+                command="history",
+                server_message="Error: " + str(e)
+            )
+
+
 
     def Logoff(self, request, context):
         username = request.username.strip()

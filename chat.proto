@@ -7,6 +7,7 @@ service Chat {
     rpc CheckMessages(stream CheckMessagesRequest) returns (stream CheckMessagesResponse);
     rpc Logoff(LogoffRequest) returns (Response);
     rpc SearchUsers(SearchRequest) returns (SearchResponse);
+    rpc History(stream HistoryRequest) returns (stream Response);
     rpc DeleteLastMessage(stream DeleteRequest) returns (stream Response);
     rpc DeactivateAccount(stream DeactivateRequest) returns (stream Response);
     rpc ReceiveMessages(ReceiveRequest) returns (stream ReceiveResponse);
@@ -71,6 +72,12 @@ message SearchResponse {
 
 // Delete last message (bidirectional)
 message DeleteRequest {
+    string username     = 1;
+    string confirmation = 2;
+}
+
+// History message (bidirectional)
+message HistoryRequest {
     string username     = 1;
     string confirmation = 2;
 }

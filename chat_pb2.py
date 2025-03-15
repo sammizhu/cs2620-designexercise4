@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\nchat.proto\"O\n\x0fRegisterRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x10\n\x08password\x18\x02 \x01(\t\x12\x18\n\x10\x63onfirm_password\x18\x03 \x01(\t\"2\n\x0cLoginRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x10\n\x08password\x18\x02 \x01(\t\"2\n\x0eGeneralMessage\x12\x0f\n\x07\x63ommand\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\">\n\x13SendMessageResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x16\n\x0eserver_message\x18\x02 \x01(\t\"3\n\x08Response\x12\x0f\n\x07\x63ommand\x18\x01 \x01(\t\x12\x16\n\x0eserver_message\x18\x02 \x01(\t\"H\n\x14\x43heckMessagesRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x0e\n\x06\x63hoice\x18\x02 \x01(\t\x12\x0e\n\x06sender\x18\x03 \x01(\t\"f\n\x15\x43heckMessagesResponse\x12\x0f\n\x07\x63ommand\x18\x01 \x01(\t\x12\x16\n\x0eserver_message\x18\x02 \x01(\t\x12\x0e\n\x06sender\x18\x03 \x01(\t\x12\x14\n\x0cmessage_body\x18\x04 \x01(\t\"!\n\rLogoffRequest\x12\x10\n\x08username\x18\x01 \x01(\t\"!\n\rSearchRequest\x12\x10\n\x08username\x18\x01 \x01(\t\"L\n\x0eSearchResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x11\n\tusernames\x18\x02 \x03(\t\x12\x16\n\x0eserver_message\x18\x03 \x01(\t\"7\n\rDeleteRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x14\n\x0c\x63onfirmation\x18\x02 \x01(\t\";\n\x11\x44\x65\x61\x63tivateRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x14\n\x0c\x63onfirmation\x18\x02 \x01(\t\"\"\n\x0eReceiveRequest\x12\x10\n\x08username\x18\x01 \x01(\t\"E\n\x0fReceiveResponse\x12\x0e\n\x06sender\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x11\n\ttimestamp\x18\x03 \x01(\t2\xc5\x03\n\x04\x43hat\x12\'\n\x08Register\x12\x10.RegisterRequest\x1a\t.Response\x12!\n\x05Login\x12\r.LoginRequest\x1a\t.Response\x12\x34\n\x0bSendMessage\x12\x0f.GeneralMessage\x1a\x14.SendMessageResponse\x12\x42\n\rCheckMessages\x12\x15.CheckMessagesRequest\x1a\x16.CheckMessagesResponse(\x01\x30\x01\x12#\n\x06Logoff\x12\x0e.LogoffRequest\x1a\t.Response\x12.\n\x0bSearchUsers\x12\x0e.SearchRequest\x1a\x0f.SearchResponse\x12\x32\n\x11\x44\x65leteLastMessage\x12\x0e.DeleteRequest\x1a\t.Response(\x01\x30\x01\x12\x36\n\x11\x44\x65\x61\x63tivateAccount\x12\x12.DeactivateRequest\x1a\t.Response(\x01\x30\x01\x12\x36\n\x0fReceiveMessages\x12\x0f.ReceiveRequest\x1a\x10.ReceiveResponse0\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\nchat.proto\"O\n\x0fRegisterRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x10\n\x08password\x18\x02 \x01(\t\x12\x18\n\x10\x63onfirm_password\x18\x03 \x01(\t\"2\n\x0cLoginRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x10\n\x08password\x18\x02 \x01(\t\"2\n\x0eGeneralMessage\x12\x0f\n\x07\x63ommand\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\">\n\x13SendMessageResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x16\n\x0eserver_message\x18\x02 \x01(\t\"3\n\x08Response\x12\x0f\n\x07\x63ommand\x18\x01 \x01(\t\x12\x16\n\x0eserver_message\x18\x02 \x01(\t\"H\n\x14\x43heckMessagesRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x0e\n\x06\x63hoice\x18\x02 \x01(\t\x12\x0e\n\x06sender\x18\x03 \x01(\t\"f\n\x15\x43heckMessagesResponse\x12\x0f\n\x07\x63ommand\x18\x01 \x01(\t\x12\x16\n\x0eserver_message\x18\x02 \x01(\t\x12\x0e\n\x06sender\x18\x03 \x01(\t\x12\x14\n\x0cmessage_body\x18\x04 \x01(\t\"!\n\rLogoffRequest\x12\x10\n\x08username\x18\x01 \x01(\t\"!\n\rSearchRequest\x12\x10\n\x08username\x18\x01 \x01(\t\"L\n\x0eSearchResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x11\n\tusernames\x18\x02 \x03(\t\x12\x16\n\x0eserver_message\x18\x03 \x01(\t\"7\n\rDeleteRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x14\n\x0c\x63onfirmation\x18\x02 \x01(\t\"8\n\x0eHistoryRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x14\n\x0c\x63onfirmation\x18\x02 \x01(\t\";\n\x11\x44\x65\x61\x63tivateRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x14\n\x0c\x63onfirmation\x18\x02 \x01(\t\"\"\n\x0eReceiveRequest\x12\x10\n\x08username\x18\x01 \x01(\t\"E\n\x0fReceiveResponse\x12\x0e\n\x06sender\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x02 \x01(\t\x12\x11\n\ttimestamp\x18\x03 \x01(\t2\xf0\x03\n\x04\x43hat\x12\'\n\x08Register\x12\x10.RegisterRequest\x1a\t.Response\x12!\n\x05Login\x12\r.LoginRequest\x1a\t.Response\x12\x34\n\x0bSendMessage\x12\x0f.GeneralMessage\x1a\x14.SendMessageResponse\x12\x42\n\rCheckMessages\x12\x15.CheckMessagesRequest\x1a\x16.CheckMessagesResponse(\x01\x30\x01\x12#\n\x06Logoff\x12\x0e.LogoffRequest\x1a\t.Response\x12.\n\x0bSearchUsers\x12\x0e.SearchRequest\x1a\x0f.SearchResponse\x12)\n\x07History\x12\x0f.HistoryRequest\x1a\t.Response(\x01\x30\x01\x12\x32\n\x11\x44\x65leteLastMessage\x12\x0e.DeleteRequest\x1a\t.Response(\x01\x30\x01\x12\x36\n\x11\x44\x65\x61\x63tivateAccount\x12\x12.DeactivateRequest\x1a\t.Response(\x01\x30\x01\x12\x36\n\x0fReceiveMessages\x12\x0f.ReceiveRequest\x1a\x10.ReceiveResponse0\x01\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -53,12 +53,14 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_SEARCHRESPONSE']._serialized_end=640
   _globals['_DELETEREQUEST']._serialized_start=642
   _globals['_DELETEREQUEST']._serialized_end=697
-  _globals['_DEACTIVATEREQUEST']._serialized_start=699
-  _globals['_DEACTIVATEREQUEST']._serialized_end=758
-  _globals['_RECEIVEREQUEST']._serialized_start=760
-  _globals['_RECEIVEREQUEST']._serialized_end=794
-  _globals['_RECEIVERESPONSE']._serialized_start=796
-  _globals['_RECEIVERESPONSE']._serialized_end=865
-  _globals['_CHAT']._serialized_start=868
-  _globals['_CHAT']._serialized_end=1321
+  _globals['_HISTORYREQUEST']._serialized_start=699
+  _globals['_HISTORYREQUEST']._serialized_end=755
+  _globals['_DEACTIVATEREQUEST']._serialized_start=757
+  _globals['_DEACTIVATEREQUEST']._serialized_end=816
+  _globals['_RECEIVEREQUEST']._serialized_start=818
+  _globals['_RECEIVEREQUEST']._serialized_end=852
+  _globals['_RECEIVERESPONSE']._serialized_start=854
+  _globals['_RECEIVERESPONSE']._serialized_end=923
+  _globals['_CHAT']._serialized_start=926
+  _globals['_CHAT']._serialized_end=1422
 # @@protoc_insertion_point(module_scope)

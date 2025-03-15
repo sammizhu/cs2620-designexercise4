@@ -135,7 +135,7 @@ coverage report -m
 ```
 ![alt text](img/serverRPC.png)
 
-### Client
+### Client 
 ClientCustom:
 ```
 coverage run --source=clientCustom testClientCustom.py
