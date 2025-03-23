@@ -10,7 +10,8 @@ from concurrent import futures
 import chat_pb2
 import chat_pb2_grpc
 import time
-
+import psycopg2
+from configparser import ConfigParser
 
 # Command-line arguments
 parser = argparse.ArgumentParser(description="Start the chat server (gRPC).")
@@ -18,17 +19,44 @@ parser.add_argument("--host", default=os.getenv("CHAT_SERVER_HOST", "0.0.0.0"), 
 parser.add_argument("--port", type=int, default=int(os.getenv("CHAT_SERVER_PORT", 65432)), help="Port number")
 args = parser.parse_args()
 HOST = args.host
+# HOST = '127.0.0.0'
 PORT = args.port
+
+def config(filename='database.ini', section='postgresql'):
+    # Create a parser
+    parser = ConfigParser()
+    parser.read(filename)
+
+    db = {}
+    if parser.has_section(section):
+        params = parser.items(section)
+        for param in params:
+            db[param[0]] = param[1]
+    else:
+        raise Exception('Section {0} not found in the {1} file'.format(section, filename))
+
+    return db
 
 # Database connection function
 def connectsql():
-    return pymysql.connect(
-        host=HOST,
-        user='root',
-        password='',
-        database='db262',
-        cursorclass=pymysql.cursors.DictCursor
-    )
+    # return pymysql.connect(
+    #     host=HOST,
+    #     user='root',
+    #     password='',
+    #     database='db262',
+    #     cursorclass=pymysql.cursors.DictCursor
+    # )
+    conn = None
+    try:
+        # read connection parameters
+        params = config()
+
+        # connect to the PostgreSQL server
+        print('Connecting to the PostgreSQL database...')
+        conn = psycopg2.connect(**params)
+        return conn
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(error)
 
 # Helper functions
 def checkRealUsername(username):
@@ -36,7 +64,9 @@ def checkRealUsername(username):
         with db.cursor() as cur:
             cur.execute("SELECT COUNT(*) AS cnt FROM users WHERE username=%s", (username,))
             row = cur.fetchone()
-            return row['cnt'] > 0
+            if row is None:
+                return False
+            return row[0] > 0
 
 def checkValidPassword(password):
     if len(password) < 7:
@@ -58,7 +88,7 @@ def checkRealPassword(username, plain_text):
             row = cur.fetchone()
             if not row:
                 return False
-            stored_hash = row['password']
+            stored_hash = row[0]
     return bcrypt.checkpw(plain_text.encode('utf-8'), stored_hash.encode('utf-8'))
 
 class ChatService(chat_pb2_grpc.ChatServicer):
@@ -88,9 +118,11 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 server_message="Passwords do not match."
             )
         hashed = hashPass(reg_password)
+        print("hi")
         try:
             with connectsql() as db:
                 with db.cursor() as cur:
+                    print("hi")
                     cur.execute("INSERT INTO users (username, password, active) VALUES (%s, %s, 1)",
                                 (reg_username, hashed))
                 db.commit()
@@ -124,7 +156,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             with db.cursor() as cur:
                 cur.execute("SELECT active FROM users WHERE username=%s", (username,))
                 activeStatus = cur.fetchone()
-                if activeStatus['active'] == 1:
+                if activeStatus[0] == 1:
                     return chat_pb2.Response(
                         command="2",
                         server_message="You are already logged in. Please log out before logging in again."
@@ -163,7 +195,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             with connectsql() as db:
                 with db.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO messages (receiver, sender, message, isread) VALUES (%s, %s, %s, 0)",
+                        "INSERT INTO messages (receiver, sender, message, isread) VALUES (%s, %s, %s, False)",
                         (target_username, sender, message)
                     )
                     db.commit()
@@ -191,9 +223,9 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             username = first_req.username.strip()
             with connectsql() as db:
                 with db.cursor() as cur:
-                    cur.execute("SELECT COUNT(*) AS cnt FROM messages WHERE receiver=%s AND isread=0", (username,))
+                    cur.execute("SELECT COUNT(*) AS cnt FROM messages WHERE receiver=%s AND isread=False", (username,))
                     row = cur.fetchone()
-                    unread_count = row['cnt']
+                    unread_count = row[0]
             if unread_count == 0:
                 yield chat_pb2.CheckMessagesResponse(
                     command="checkmessages",
@@ -237,7 +269,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 context.cancel()
             with connectsql() as db:
                 with db.cursor() as cur:
-                    cur.execute("SELECT sender, COUNT(*) as num FROM messages WHERE receiver=%s AND isread=0 GROUP BY sender", (username,))
+                    cur.execute("SELECT sender, COUNT(*) as num FROM messages WHERE receiver=%s AND isread=False GROUP BY sender", (username,))
                     senders_info = cur.fetchall()
             if not senders_info:
                 yield chat_pb2.CheckMessagesResponse(
@@ -245,7 +277,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                     server_message="No unread messages found."
                 )
                 return
-            senders_str = ", ".join([f"{r['sender']}({r['num']})" for r in senders_info])
+            senders_str = ", ".join([f"{r[0]}({r[1]})" for r in senders_info])
             yield chat_pb2.CheckMessagesResponse(
                 command="checkmessages",
                 server_message=f"You have unread messages from:\n{senders_str}\nWhich sender do you want to read from?"
@@ -260,7 +292,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             chosen_sender = req.sender.strip()
             with connectsql() as db:
                 with db.cursor() as cur:
-                    cur.execute("SELECT messageid, sender, message, datetime FROM messages WHERE receiver=%s AND sender=%s AND isread=0 ORDER BY messageid", (username, chosen_sender))
+                    cur.execute("SELECT messageid, sender, message, datetime FROM messages WHERE receiver=%s AND sender=%s AND isread=False ORDER BY messageid", (username, chosen_sender))
                     msgs = cur.fetchall()
             if not msgs:
                 yield chat_pb2.CheckMessagesResponse(
@@ -272,22 +304,22 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             i = 0
             while i < len(msgs):
                 batch = msgs[i:i+batch_size]
-                for m in batch:
-                    ts = m['datetime'].strftime("%Y-%m-%d %H:%M:%S")
+                for m in batch: # 0: messageid, 1: sender, 2: message, 3: datetime
+                    ts = m[3].strftime("%Y-%m-%d %H:%M:%S")
                     yield chat_pb2.CheckMessagesResponse(
                         command="checkmessages",
-                        server_message=f"{ts} {m['sender']}: {m['message']}",
-                        sender=m['sender'],
-                        message_body=m['message']
+                        server_message=f"{ts} {m[1]}: {m[2]}",
+                        sender=m[1],
+                        message_body=m[2]
                     )
-                batch_ids = [m['messageid'] for m in batch]
+                batch_ids = [m[0] for m in batch]
                 with connectsql() as db:
                     with db.cursor() as cur:
                         if len(batch_ids) == 1:
-                            cur.execute("UPDATE messages SET isread=1 WHERE messageid=%s", (batch_ids[0],))
+                            cur.execute("UPDATE messages SET isread=True WHERE messageid=%s", (batch_ids[0],))
                         else:
                             placeholders = ','.join(['%s'] * len(batch_ids))
-                            cur.execute(f"UPDATE messages SET isread=1 WHERE messageid IN ({placeholders})", batch_ids)
+                            cur.execute(f"UPDATE messages SET isread=True WHERE messageid IN ({placeholders})", batch_ids)
                     db.commit()
                 yield chat_pb2.CheckMessagesResponse(
                     command="checkmessages",
@@ -385,7 +417,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 with db.cursor() as cur:
                     cur.execute("SELECT username FROM users")
                     rows = cur.fetchall()
-            all_users = [r['username'] for r in rows if r['username'] != username]
+            all_users = [r[0] for r in rows if r[0] != username]
             return chat_pb2.SearchResponse(
                 success=True,
                 usernames=all_users,
@@ -422,7 +454,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             with connectsql() as db:
                 with db.cursor() as cur:
                     cur.execute(
-                        "SELECT messageid, message, receiver FROM messages WHERE sender=%s AND isread=0 ORDER BY messageid DESC LIMIT 1",
+                        "SELECT messageid, message, receiver FROM messages WHERE sender=%s AND isread=False ORDER BY messageid DESC LIMIT 1",
                         (username,)
                     )
                     row = cur.fetchone()
@@ -507,22 +539,22 @@ class ChatService(chat_pb2_grpc.ChatServicer):
         while context.is_active():
             with connectsql() as db:
                 with db.cursor() as cur:
-                    cur.execute("SELECT messageid, sender, message, datetime FROM messages WHERE receiver=%s AND isread=0 ORDER BY datetime", (username,))
+                    cur.execute("SELECT messageid, sender, message, datetime FROM messages WHERE receiver=%s AND isread=False ORDER BY datetime", (username,))
                     msgs = cur.fetchall()
             if msgs:
                 for m in msgs:
-                    ts = m['datetime'].strftime("%Y-%m-%d %H:%M:%S")
+                    ts = m[3].strftime("%Y-%m-%d %H:%M:%S") # 3: datetime
                     yield chat_pb2.ReceiveResponse(
-                        sender=m['sender'],
-                        message=m['message'],
+                        sender=m[1], # 1: sender
+                        message=m[2], # 2: message
                         timestamp=ts
                     )
                 # Mark these messages as read:
-                batch_ids = [m['messageid'] for m in msgs]
+                batch_ids = [m[0] for m in msgs] # 0: messageid
                 with connectsql() as db:
                     with db.cursor() as cur:
                         placeholders = ','.join(['%s'] * len(batch_ids))
-                        cur.execute(f"UPDATE messages SET isread=1 WHERE messageid IN ({placeholders})", batch_ids)
+                        cur.execute(f"UPDATE messages SET isread=True WHERE messageid IN ({placeholders})", batch_ids)
                     db.commit()
             time.sleep(1)  
 
@@ -533,6 +565,13 @@ def serve():
     server.add_insecure_port(address)
     server.start()
     print(f"Server started on {address}")
+    try:
+        with connectsql() as db:
+            with db.cursor() as cur:
+                cur.execute("UPDATE users SET active=0")
+            db.commit()
+    except Exception as e:
+        print("Error resetting active status:", e)
     server.wait_for_termination()
 
 if __name__ == "__main__":

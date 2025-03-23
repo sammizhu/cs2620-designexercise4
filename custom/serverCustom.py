@@ -5,6 +5,8 @@ import pymysql.cursors
 import bcrypt
 import argparse
 import os
+import psycopg2
+from configparser import ConfigParser
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description="Start the chat server.")
@@ -17,16 +19,41 @@ PORT = args.port  # Use argument or environment variable
 
 clients = {}  
 
+def config(filename='database.ini', section='postgresql'):
+    # Create a parser
+    parser = ConfigParser()
+    parser.read(filename)
+
+    db = {}
+    if parser.has_section(section):
+        params = parser.items(section)
+        for param in params:
+            db[param[0]] = param[1]
+    else:
+        raise Exception('Section {0} not found in the {1} file'.format(section, filename))
+
+    return db
 
 def connectsql():
     """Establishes and returns a connection to the MySQL database."""
-    return pymysql.connect(
-        host=HOST,
-        user='root',
-        password='', 
-        database='db262',
-        cursorclass=pymysql.cursors.DictCursor
-    )
+    # return pymysql.connect(
+    #     host=HOST,
+    #     user='root',
+    #     password='', 
+    #     database='db262',
+    #     cursorclass=pymysql.cursors.DictCursor
+    # )
+    conn = None
+    try:
+        # read connection parameters
+        params = config()
+
+        # connect to the PostgreSQL server
+        print('Connecting to the PostgreSQL database...')
+        conn = psycopg2.connect(**params)
+        return conn
+    except (Exception, psycopg2.DatabaseError) as error:
+        print(error)
 
 def checkRealUsername(username):
     """Checks if the given username exists in the database.
@@ -141,6 +168,7 @@ def handle_registration(conn, user_id):
 
     # 3) Hash & store
     hashed = hashPass(reg_password)
+
     try:
         with connectsql() as db:
             with db.cursor() as cur:
