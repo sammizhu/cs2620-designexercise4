@@ -19,44 +19,47 @@ parser.add_argument("--host", default=os.getenv("CHAT_SERVER_HOST", "0.0.0.0"), 
 parser.add_argument("--port", type=int, default=int(os.getenv("CHAT_SERVER_PORT", 65432)), help="Port number")
 args = parser.parse_args()
 HOST = args.host
-# HOST = '127.0.0.0'
 PORT = args.port
 
-def config(filename='database.ini', section='postgresql'):
-    # Create a parser
+def config(filename='database.ini'):
     parser = ConfigParser()
     parser.read(filename)
 
     db = {}
-    if parser.has_section(section):
-        params = parser.items(section)
-        for param in params:
-            db[param[0]] = param[1]
-    else:
-        raise Exception('Section {0} not found in the {1} file'.format(section, filename))
+    sections = ['postgresql1', 'postgresql2', 'postgresql3']
+    for section in sections:
+        if parser.has_section(section):
+            params = {}
+            for param in parser.items(section):
+                params[param[0]] = param[1]
+            db[section] = params
+        else:
+            raise Exception(f'Section {section} not found in the {filename} file')
 
     return db
 
 # Database connection function
 def connectsql():
-    # return pymysql.connect(
-    #     host=HOST,
-    #     user='root',
-    #     password='',
-    #     database='db262',
-    #     cursorclass=pymysql.cursors.DictCursor
-    # )
     conn = None
+    sections = ['postgresql1', 'postgresql2', 'postgresql3']
     try:
-        # read connection parameters
-        params = config()
-
-        # connect to the PostgreSQL server
-        print('Connecting to the PostgreSQL database...')
-        conn = psycopg2.connect(**params)
-        return conn
+        db_params = config()
+        conns = {}
+        for section, params in db_params.items():
+            conn = psycopg2.connect(
+                host=params['host'],
+                port=params['port'],
+                user=params['user'],
+                password=params['password'],
+                database=params['database']
+            )
+            conns[section] = conn
+        print(f'Connected to database {sections[0]}')
+        return conns[sections[0]]
+    
     except (Exception, psycopg2.DatabaseError) as error:
-        print(error)
+        print(f'Error: {error}')
+        return None
 
 # Helper functions
 def checkRealUsername(username):
@@ -118,11 +121,9 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 server_message="Passwords do not match."
             )
         hashed = hashPass(reg_password)
-        print("hi")
         try:
             with connectsql() as db:
                 with db.cursor() as cur:
-                    print("hi")
                     cur.execute("INSERT INTO users (username, password, active) VALUES (%s, %s, 1)",
                                 (reg_username, hashed))
                 db.commit()
