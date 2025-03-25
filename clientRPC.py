@@ -78,17 +78,31 @@ class ChatClient:
             return self.failover_and_retry(rpc_func, *args, **kwargs)
 
     def failover_and_retry(self, rpc_func, *args, **kwargs):
-        """Move to the next server in the list, connect, and retry once."""
-        old_index = self.current_server_index
-        self.current_server_index = (self.current_server_index + 1) % len(self.server_candidates)
-        if self.current_server_index == old_index:
-            # We wrapped all the way around => no other servers
-            print("[DEBUG] No additional servers to fail over to. Raising exception.")
-            raise Exception("No additional servers to fail over to.")
+        """
+        Keep trying the 'next' server (in a round-robin fashion) until one call succeeds
+        or we've tried all servers. If all fail, raise an exception.
+        """
+        total = len(self.server_candidates)
+        original_index = self.current_server_index
 
-        self.connect_to_server(self.current_server_index)
-        print(f"[DEBUG] Retrying on server index {self.current_server_index}.")
-        return rpc_func(*args, **kwargs)
+        for attempt in range(total):
+            self.current_server_index = (self.current_server_index + 1) % total
+
+            # If we've looped around to the original index, we have tried them all
+            if attempt > 0 and self.current_server_index == original_index:
+                break
+
+            srv_host, srv_port = self.server_candidates[self.current_server_index]
+            print(f"[DEBUG] Failover attempt {attempt+1}: trying {srv_host}:{srv_port}...")
+            self.connect_to_server(self.current_server_index)
+
+            try:
+                # Attempt the same RPC call on the new server
+                return rpc_func(*args, **kwargs)
+            except Exception as e:
+                print(f"[DEBUG] Server {srv_host}:{srv_port} also failed with: {e}")
+
+        raise Exception("All servers are unavailable after full failover attempt.")
 
     # ----------------------------------------------------------------
     # Build UI frames

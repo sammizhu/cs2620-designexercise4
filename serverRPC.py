@@ -14,10 +14,6 @@ from configparser import ConfigParser
 # 1. Single-DB config
 ########################################
 def load_single_config(replica_id=1, filename='database.ini'):
-    """
-    Reads exactly one section: postgresql1, postgresql2, or postgresql3,
-    depending on 'replica_id'.
-    """
     parser = ConfigParser()
     parser.read(filename)
     section = f'postgresql{replica_id}'
@@ -29,9 +25,6 @@ def load_single_config(replica_id=1, filename='database.ini'):
     return params
 
 def connectSingleDB(replica_id=1):
-    """
-    Connect to exactly one DB from database.ini (postgresql1, postgresql2, or postgresql3).
-    """
     db_config = load_single_config(replica_id)
     try:
         conn = psycopg2.connect(
@@ -76,6 +69,8 @@ class ChatService(chat_pb2_grpc.ChatServicer):
         super().__init__()
         self.db_conn = db_conn
         self.other_stubs = other_stubs  # list of ChatStub objects for the other servers
+        # Keep track of which stub we'll try first in replicate_to_others
+        self.current_stub_index = 0
 
     ########################################
     # 3.A. Local DB read/write
@@ -91,19 +86,37 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             return cur.fetchall()
 
     ########################################
-    # 3.B. replicate_to_others helper
+    # 3.B. replicate_to_others with round-robin attempt
     ########################################
     def replicate_to_others(self, sql, params=()):
         """
-        After local success, replicate to other servers by calling ReplicateWrite.
-        Update both of the other two replicas.
+        Round-robin approach: keep trying each stub until one works or we've tried them all.
+        If one succeeds, we stop. If all fail, we just print an error.
         """
-        success_count = 0
-        for stub in self.other_stubs:
+        if not self.other_stubs:
+            return  # No other stubs at all.
+
+        total = len(self.other_stubs)
+
+        for attempt in range(total):
+            # Move to the next stub in a ring
+            self.current_stub_index = (self.current_stub_index + 1) % total
+            stub = self.other_stubs[self.current_stub_index]
+
+            print(f"[DEBUG] replicate_to_others attempt {attempt+1}, trying stub index {self.current_stub_index}")
             try:
-                resp = stub.ReplicateWrite(chat_pb2.ReplicateRequest(sql=sql, params=params))
+                resp = stub.ReplicateWrite(
+                    chat_pb2.ReplicateRequest(sql=sql, params=params)
+                )
+                if resp.success:
+                    print(f"[DEBUG] replicate_to_others: success on stub index {self.current_stub_index}")
+                    return  # stop after one success
+                else:
+                    print(f"[DEBUG] replicate_to_others: stub {self.current_stub_index} returned error: {resp.message}")
             except Exception as ex:
-                print("Replication call failed:", ex)
+                print(f"[DEBUG] replicate_to_others: stub {self.current_stub_index} call failed: {ex}")
+
+        print("[DEBUG] replicate_to_others: all stubs failed or returned error.")
 
     ########################################
     # 3.C. The ReplicateWrite RPC
@@ -140,7 +153,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
     ########################################
     # 3.E. All user-facing RPCs
     ########################################
-
     def Register(self, request, context):
         print(f"[DEBUG] Client {context.peer()} called Register")
 
@@ -215,7 +227,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 command="2",
                 server_message="You are already logged in. Please log out before logging in again."
             )
-        # Otherwise, set them active
         try:
             self.local_write("UPDATE users SET active=1 WHERE username=%s", (username,))
             self.replicate_to_others(
@@ -243,7 +254,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
         if not full_text.startswith("@"):
             return chat_pb2.SendMessageResponse(
                 success=False,
-                server_message="Use '@username message'."
+                server_message="To send messages, use '@username message'. You can also type 'check', 'logoff', 'history', 'search', 'delete', or 'deactivate'."
             )
         parts = full_text.split(" ", 1)
         if len(parts) < 2:
@@ -259,30 +270,21 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 server_message="Recipient does not exist."
             )
         try:
-            # local
             self.local_write(
                 "INSERT INTO messages (receiver, sender, message, isread) VALUES (%s, %s, %s, False)",
                 (target_username, sender, msg_text)
             )
-            # replicate
             self.replicate_to_others(
                 "INSERT INTO messages (receiver, sender, message, isread) VALUES (%s, %s, %s, False)",
                 (target_username, sender, msg_text)
             )
-            return chat_pb2.SendMessageResponse(
-                success=True,
-                server_message=""
-            )
+            return chat_pb2.SendMessageResponse(success=True, server_message="")
         except Exception as e:
             traceback.print_exc()
-            return chat_pb2.SendMessageResponse(
-                success=False,
-                server_message="Error storing message: " + str(e)
-            )
+            return chat_pb2.SendMessageResponse(success=False, server_message="Error storing message: " + str(e))
 
     def Logoff(self, request, context):
         print(f"[DEBUG] Client {context.peer()} called Logoff")
-
         username = request.username.strip()
         if not username:
             return chat_pb2.Response(
@@ -290,14 +292,8 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 server_message="No username provided."
             )
         try:
-            self.local_write(
-                "UPDATE users SET active=0 WHERE username=%s",
-                (username,)
-            )
-            self.replicate_to_others(
-                "UPDATE users SET active=0 WHERE username=%s",
-                (username,)
-            )
+            self.local_write("UPDATE users SET active=0 WHERE username=%s", (username,))
+            self.replicate_to_others("UPDATE users SET active=0 WHERE username=%s", (username,))
             return chat_pb2.Response(
                 command="logoff",
                 server_message=f"{username} has been logged off."
@@ -331,7 +327,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
 
     def DeleteLastMessage(self, request_iterator, context):
         print(f"[DEBUG] Client {context.peer()} called DeleteLastMessage")
-
         try:
             req_iter = iter(request_iterator)
             first_req = next(req_iter, None)
@@ -343,7 +338,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 return
             username = first_req.username.strip()
 
-            # Find last unread message from this sender
             unread_rows = self.local_read(
                 "SELECT messageid, message, receiver FROM messages "
                 "WHERE sender=%s AND isread=False ORDER BY messageid DESC LIMIT 1",
@@ -371,10 +365,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             if second_req.confirmation.strip().lower() == "yes":
                 try:
                     self.local_write("DELETE FROM messages WHERE messageid=%s", (msgid,))
-                    self.replicate_to_others(
-                        "DELETE FROM messages WHERE messageid=%s",
-                        (msgid,)
-                    )
+                    self.replicate_to_others("DELETE FROM messages WHERE messageid=%s", (msgid,))
                     yield chat_pb2.Response(
                         command="delete",
                         server_message="Message deleted."
@@ -398,7 +389,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
 
     def DeactivateAccount(self, request_iterator, context):
         print(f"[DEBUG] Client {context.peer()} called DeactivateAccount")
-
         try:
             req_iter = iter(request_iterator)
             first_req = next(req_iter, None)
@@ -410,12 +400,10 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 return
             username = first_req.username.strip()
 
-            # Prompt user for yes/no
             yield chat_pb2.Response(
                 command="deactivate",
                 server_message="Are you sure you want to deactivate your account? (yes/no)"
             )
-
             second_req = next(req_iter, None)
             if not second_req or not second_req.confirmation.strip():
                 yield chat_pb2.Response(
@@ -456,7 +444,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
 
     def CheckMessages(self, request_iterator, context):
         print(f"[DEBUG] Client {context.peer()} called CheckMessages")
-
         try:
             req_iter = iter(request_iterator)
             first_req = next(req_iter, None)
@@ -477,15 +464,22 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             if unread_count == 0:
                 yield chat_pb2.CheckMessagesResponse(
                     command="checkmessages",
-                    server_message="You have 0 unread messages."
-                )
+                    server_message = (
+                     " ------------------------------------------\n"
+                     "| You have 0 unread messages.             |\n"
+                     "| Type @username msg to send new messages |\n"
+                     " ------------------------------------------"
+                 ))
                 return
             yield chat_pb2.CheckMessagesResponse(
                 command="checkmessages",
-                server_message=(
-                    f"You have {unread_count} unread message(s).\n"
-                    "Type '1' to read them, or '2' to skip."
-                )
+                server_message = (
+                         " ----------------------------------------- \n"
+                         f"| You have {unread_count} unread messages.              |\n"
+                         "| Type '1' to read them, or '2' to skip    |\n"
+                         "| and send new messages.                   |\n"
+                         "  ----------------------------------------- "
+                 )
             )
 
             req_choice = next(req_iter, None)
@@ -515,7 +509,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                     server_message="No unread messages found."
                 )
                 return
-            senders_str = ", ".join([f"{row[0]}({row[1]})" for row in sender_counts])
+            senders_str = ", ".join([f"{r[0]}({r[1]})" for r in sender_counts])
             yield chat_pb2.CheckMessagesResponse(
                 command="checkmessages",
                 server_message=f"Unread from: {senders_str}\nWhich sender do you want to read?"
@@ -559,7 +553,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 sql_update = f"UPDATE messages SET isread=True WHERE messageid IN ({placeholders})"
                 try:
                     self.local_write(sql_update, msg_ids)
-                    # replicate the isread update
                     self.replicate_to_others(sql_update, msg_ids)
                 except Exception as e:
                     yield chat_pb2.CheckMessagesResponse(
@@ -576,7 +569,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                         command="checkmessages",
                         server_message="Type anything to see the next batch..."
                     )
-                    _ = next(req_iter, None)  # just wait for user input
+                    _ = next(req_iter, None)
 
             yield chat_pb2.CheckMessagesResponse(
                 command="checkmessages",
@@ -625,11 +618,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
 # 4. Build stubs to other servers
 ########################################
 def build_other_stubs(this_hostport):
-    """
-    Suppose we have 3 known addresses: :5432, :5433, :5434
-    We skip our own host:port so we only replicate to the others.
-    Return a list of ChatStub objects.
-    """
     addresses = [
         "10.250.52.124:5432",
         "10.250.52.124:5433",
@@ -653,13 +641,11 @@ def serve():
     parser.add_argument("--replica_id", type=int, default=1, help="Which DB config to load (1..3).")
     args = parser.parse_args()
 
-    # Connect to local DB
     local_conn = connectSingleDB(args.replica_id)
     if not local_conn:
         print("Could not connect to local DB. Exiting.")
         return
 
-    # Build stubs for other servers
     this_hostport = f"{args.host}:{args.port}"
     other_stubs = build_other_stubs(this_hostport)
 
