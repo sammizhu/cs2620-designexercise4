@@ -656,8 +656,8 @@ class ChatService(chat_pb2_grpc.ChatServicer):
 ########################################
 def build_other_stubs(this_hostport):
     addresses = [
-        "10.250.52.124:65432",
-        "10.250.244.76:65433",
+        "10.250.244.76:65432",
+        "10.250.52.124:65433",
         "10.250.52.124:65434",
     ]
     other_addresses = [addr for addr in addresses if addr != this_hostport]
