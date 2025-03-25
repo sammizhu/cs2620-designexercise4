@@ -97,7 +97,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
 
         total = len(self.other_stubs)
 
-        for i in range(total-1):
+        for i in range(total):
             stub = self.other_stubs[i]
             print(f"[DEBUG] replicate_to_others to stub {stub}")
             try:

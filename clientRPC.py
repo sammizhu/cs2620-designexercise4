@@ -98,6 +98,7 @@ class ChatClient:
 
             try:
                 # Attempt the same RPC call on the new server
+                print(*args, **kwargs)
                 return rpc_func(*args, **kwargs)
             except Exception as e:
                 print(f"[DEBUG] Server {srv_host}:{srv_port} also failed with: {e}")
