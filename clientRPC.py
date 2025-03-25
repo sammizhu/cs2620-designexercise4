@@ -23,9 +23,9 @@ class ChatClient:
 
         # List of candidate servers for failover:
         self.server_candidates = [
-            ("0.0.0.0", 65432),  # primary
-            ("0.0.0.0", 65433),  # secondary
-            ("0.0.0.0", 65434),  # tertiary
+            ("10.250.52.124", 65432),  # primary
+            ("10.250.244.76", 65433),  # secondary
+            ("10.250.52.124", 65434),  # tertiary
         ]
         # Tracks which server we are currently using
         self.current_server_index = 0
