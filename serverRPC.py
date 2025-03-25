@@ -2,75 +2,55 @@ import time
 import traceback
 import argparse
 import os
-import pymysql
-import pymysql.cursors
 import bcrypt
 import grpc
 from concurrent import futures
 import chat_pb2
 import chat_pb2_grpc
-import time
 import psycopg2
 from configparser import ConfigParser
 
-# Command-line arguments
-parser = argparse.ArgumentParser(description="Start the chat server (gRPC).")
-parser.add_argument("--host", default=os.getenv("CHAT_SERVER_HOST", "0.0.0.0"), help="Server hostname or IP")
-parser.add_argument("--port", type=int, default=int(os.getenv("CHAT_SERVER_PORT", 65432)), help="Port number")
-args = parser.parse_args()
-HOST = args.host
-PORT = args.port
-
-def config(filename='database.ini'):
+########################################
+# 1. Single-DB config
+########################################
+def load_single_config(replica_id=1, filename='database.ini'):
+    """
+    Reads exactly one section: postgresql1, postgresql2, or postgresql3,
+    depending on 'replica_id'.
+    """
     parser = ConfigParser()
     parser.read(filename)
+    section = f'postgresql{replica_id}'
+    if not parser.has_section(section):
+        raise Exception(f"Section {section} not found in {filename}")
+    params = {}
+    for param, value in parser.items(section):
+        params[param] = value
+    return params
 
-    db = {}
-    sections = ['postgresql1', 'postgresql2', 'postgresql3']
-    for section in sections:
-        if parser.has_section(section):
-            params = {}
-            for param in parser.items(section):
-                params[param[0]] = param[1]
-            db[section] = params
-        else:
-            raise Exception(f'Section {section} not found in the {filename} file')
-
-    return db
-
-# Database connection function
-def connectsql():
-    conn = None
-    sections = ['postgresql1', 'postgresql2', 'postgresql3']
+def connectSingleDB(replica_id=1):
+    """
+    Connect to exactly one DB from database.ini (postgresql1, postgresql2, or postgresql3).
+    """
+    db_config = load_single_config(replica_id)
     try:
-        db_params = config()
-        conns = {}
-        for section, params in db_params.items():
-            conn = psycopg2.connect(
-                host=params['host'],
-                port=params['port'],
-                user=params['user'],
-                password=params['password'],
-                database=params['database']
-            )
-            conns[section] = conn
-        print(f'Connected to database {sections[0]}')
-        return conns[sections[0]]
-    
-    except (Exception, psycopg2.DatabaseError) as error:
-        print(f'Error: {error}')
+        conn = psycopg2.connect(
+            host=db_config['host'],
+            port=db_config['port'],
+            user=db_config['user'],
+            password=db_config['password'],
+            database=db_config['database']
+        )
+        conn.autocommit = False
+        print(f"Connected to {db_config['database']} at {db_config['host']}:{db_config['port']} (replica_id={replica_id})")
+        return conn
+    except Exception as e:
+        print(f"Error connecting to single DB for replica_id={replica_id}: {e}")
         return None
 
-# Helper functions
-def checkRealUsername(username):
-    with connectsql() as db:
-        with db.cursor() as cur:
-            cur.execute("SELECT COUNT(*) AS cnt FROM users WHERE username=%s", (username,))
-            row = cur.fetchone()
-            if row is None:
-                return False
-            return row[0] > 0
-
+########################################
+# 2. Helper functions
+########################################
 def checkValidPassword(password):
     if len(password) < 7:
         return False
@@ -84,18 +64,86 @@ def hashPass(password):
     hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
     return hashed.decode('utf-8')
 
-def checkRealPassword(username, plain_text):
-    with connectsql() as db:
-        with db.cursor() as cur:
-            cur.execute("SELECT password FROM users WHERE username=%s", (username,))
-            row = cur.fetchone()
-            if not row:
-                return False
-            stored_hash = row[0]
-    return bcrypt.checkpw(plain_text.encode('utf-8'), stored_hash.encode('utf-8'))
-
+########################################
+# 3. ChatService with RPC-based replication
+########################################
 class ChatService(chat_pb2_grpc.ChatServicer):
+    def __init__(self, db_conn, other_stubs):
+        """
+        :param db_conn: psycopg2 connection to THIS server's local DB
+        :param other_stubs: list of stubs for the OTHER servers so we can replicate
+        """
+        super().__init__()
+        self.db_conn = db_conn
+        self.other_stubs = other_stubs  # list of ChatStub objects for the other servers
+
+    ########################################
+    # 3.A. Local DB read/write
+    ########################################
+    def local_write(self, sql, params=()):
+        with self.db_conn.cursor() as cur:
+            cur.execute(sql, params)
+        self.db_conn.commit()
+
+    def local_read(self, sql, params=()):
+        with self.db_conn.cursor() as cur:
+            cur.execute(sql, params)
+            return cur.fetchall()
+
+    ########################################
+    # 3.B. replicate_to_others helper
+    ########################################
+    def replicate_to_others(self, sql, params=()):
+        """
+        After local success, replicate to other servers by calling ReplicateWrite.
+        Update both of the other two replicas.
+        """
+        success_count = 0
+        for stub in self.other_stubs:
+            try:
+                resp = stub.ReplicateWrite(chat_pb2.ReplicateRequest(sql=sql, params=params))
+            except Exception as ex:
+                print("Replication call failed:", ex)
+
+    ########################################
+    # 3.C. The ReplicateWrite RPC
+    ########################################
+    def ReplicateWrite(self, request, context):
+        """
+        Another server calls this to replicate a SQL statement on our local DB.
+        We'll do local_write with the given SQL, then return success/fail.
+        """
+        print(f"[DEBUG] Peer {context.peer()} called ReplicateWrite")
+        sql = request.sql
+        params = request.params
+        try:
+            self.local_write(sql, params)
+            return chat_pb2.ReplicateResponse(success=True, message="OK")
+        except Exception as e:
+            traceback.print_exc()
+            return chat_pb2.ReplicateResponse(success=False, message=str(e))
+
+    ########################################
+    # 3.D. Additional helpers
+    ########################################
+    def checkRealUsername(self, username):
+        rows = self.local_read("SELECT COUNT(*) FROM users WHERE username=%s", (username,))
+        return rows and rows[0][0] > 0
+
+    def checkRealPassword(self, username, plain_text):
+        rows = self.local_read("SELECT password FROM users WHERE username=%s", (username,))
+        if not rows:
+            return False
+        stored_hash = rows[0][0]
+        return bcrypt.checkpw(plain_text.encode('utf-8'), stored_hash.encode('utf-8'))
+
+    ########################################
+    # 3.E. All user-facing RPCs
+    ########################################
+
     def Register(self, request, context):
+        print(f"[DEBUG] Client {context.peer()} called Register")
+
         reg_username = request.username.strip()
         reg_password = request.password.strip()
         confirm_password = request.confirm_password.strip()
@@ -105,7 +153,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 command="1",
                 server_message="Registration canceled: All fields are required."
             )
-        if checkRealUsername(reg_username):
+        if self.checkRealUsername(reg_username):
             return chat_pb2.Response(
                 command="1",
                 server_message="Username taken. Please choose another."
@@ -113,71 +161,89 @@ class ChatService(chat_pb2_grpc.ChatServicer):
         if not checkValidPassword(reg_password):
             return chat_pb2.Response(
                 command="1",
-                server_message="Invalid password: Must be >=7 chars, include uppercase, digit, and special char."
+                server_message="Invalid password: must be >=7 chars, uppercase, digit, special char."
             )
         if reg_password != confirm_password:
             return chat_pb2.Response(
                 command="1",
                 server_message="Passwords do not match."
             )
+
         hashed = hashPass(reg_password)
         try:
-            with connectsql() as db:
-                with db.cursor() as cur:
-                    cur.execute("INSERT INTO users (username, password, active) VALUES (%s, %s, 1)",
-                                (reg_username, hashed))
-                db.commit()
+            # local
+            self.local_write(
+                "INSERT INTO users (username, password, active) VALUES (%s, %s, 1)",
+                (reg_username, hashed)
+            )
+            # replicate
+            self.replicate_to_others(
+                "INSERT INTO users (username, password, active) VALUES (%s, %s, 1)",
+                (reg_username, hashed)
+            )
             return chat_pb2.Response(
                 command="1",
                 server_message="Registration successful. You are now logged in!"
             )
-        except Exception:
+        except Exception as e:
             traceback.print_exc()
             return chat_pb2.Response(
                 command="1",
-                server_message="Server error during registration."
+                server_message=f"Server error during registration: {e}"
             )
 
     def Login(self, request, context):
+        print(f"[DEBUG] Client {context.peer()} called Login")
+
         username = request.username.strip()
         password = request.password.strip()
 
-        if not checkRealUsername(username):
+        if not self.checkRealUsername(username):
             return chat_pb2.Response(
                 command="2",
                 server_message="User not found."
             )
-        if not checkRealPassword(username, password):
+        if not self.checkRealPassword(username, password):
             return chat_pb2.Response(
                 command="2",
                 server_message="Incorrect password."
             )
 
-        with connectsql() as db:
-            with db.cursor() as cur:
-                cur.execute("SELECT active FROM users WHERE username=%s", (username,))
-                activeStatus = cur.fetchone()
-                if activeStatus[0] == 1:
-                    return chat_pb2.Response(
-                        command="2",
-                        server_message="You are already logged in. Please log out before logging in again."
-                    )
-                else:
-                    cur.execute("UPDATE users SET active=1 WHERE username=%s", (username,))
-                    db.commit()
-        return chat_pb2.Response(
-            command="2",
-            server_message=f"Welcome, {username}!"
-        )
+        rows = self.local_read("SELECT active FROM users WHERE username=%s", (username,))
+        if rows and rows[0][0] == 1:
+            return chat_pb2.Response(
+                command="2",
+                server_message="You are already logged in. Please log out before logging in again."
+            )
+        # Otherwise, set them active
+        try:
+            self.local_write("UPDATE users SET active=1 WHERE username=%s", (username,))
+            self.replicate_to_others(
+                "UPDATE users SET active=1 WHERE username=%s",
+                (username,)
+            )
+            return chat_pb2.Response(
+                command="2",
+                server_message=f"Welcome, {username}!"
+            )
+        except Exception as e:
+            traceback.print_exc()
+            return chat_pb2.Response(
+                command="2",
+                server_message="Error setting user active: " + str(e)
+            )
 
     def SendMessage(self, request, context):
+        print(f"[DEBUG] Client {context.peer()} called SendMessage")
+
         full_text = request.message.strip()
         md = dict(context.invocation_metadata())
         sender = md.get("username", "unknown")
+
         if not full_text.startswith("@"):
             return chat_pb2.SendMessageResponse(
                 success=False,
-                server_message="To send messages, use '@username message'. You can also type 'check', 'logoff',' search', 'delete', or 'deactivate'."
+                server_message="Use '@username message'."
             )
         parts = full_text.split(" ", 1)
         if len(parts) < 2:
@@ -186,209 +252,37 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 server_message="Invalid format. Use '@username message'."
             )
         target_username = parts[0][1:]
-        message = parts[1]
-        if not checkRealUsername(target_username):
+        msg_text = parts[1]
+        if not self.checkRealUsername(target_username):
             return chat_pb2.SendMessageResponse(
                 success=False,
                 server_message="Recipient does not exist."
             )
         try:
-            with connectsql() as db:
-                with db.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO messages (receiver, sender, message, isread) VALUES (%s, %s, %s, False)",
-                        (target_username, sender, message)
-                    )
-                    db.commit()
+            # local
+            self.local_write(
+                "INSERT INTO messages (receiver, sender, message, isread) VALUES (%s, %s, %s, False)",
+                (target_username, sender, msg_text)
+            )
+            # replicate
+            self.replicate_to_others(
+                "INSERT INTO messages (receiver, sender, message, isread) VALUES (%s, %s, %s, False)",
+                (target_username, sender, msg_text)
+            )
             return chat_pb2.SendMessageResponse(
                 success=True,
                 server_message=""
             )
-        except Exception:
+        except Exception as e:
             traceback.print_exc()
             return chat_pb2.SendMessageResponse(
                 success=False,
-                server_message="Error storing message."
+                server_message="Error storing message: " + str(e)
             )
-
-    def CheckMessages(self, request_iterator, context):
-        try:
-            req_iter = iter(request_iterator)
-            first_req = next(req_iter, None)
-            if first_req is None or not first_req.username.strip():
-                yield chat_pb2.CheckMessagesResponse(
-                    command="checkmessages",
-                    server_message="No username provided. Aborting."
-                )
-                return
-            username = first_req.username.strip()
-            with connectsql() as db:
-                with db.cursor() as cur:
-                    cur.execute("SELECT COUNT(*) AS cnt FROM messages WHERE receiver=%s AND isread=False", (username,))
-                    row = cur.fetchone()
-                    unread_count = row[0]
-            if unread_count == 0:
-                yield chat_pb2.CheckMessagesResponse(
-                    command="checkmessages",
-                    server_message = (
-                    " ------------------------------------------\n"
-                    "| You have 0 unread messages.             |\n"
-                    "| Type @username msg to send new messages |\n"
-                    " ------------------------------------------"
-                ))
-                return                                                                                                             
-            else:
-                yield chat_pb2.CheckMessagesResponse(
-                    command="checkmessages",
-                    server_message = (
-                        " ----------------------------------------- \n"
-                        f"| You have {unread_count} unread messages.              |\n"
-                        "| Type '1' to read them, or '2' to skip    |\n"
-                        "| and send new messages.                   |\n"
-                        "  ----------------------------------------- "
-                ))
-            req = next(req_iter, None)
-            if req is None:
-                yield chat_pb2.CheckMessagesResponse(
-                    command="checkmessages",
-                    server_message="No choice provided. Aborting."
-                )
-                return
-            choice = req.choice.strip()
-            if choice == "2":
-                yield chat_pb2.CheckMessagesResponse(
-                    command="checkmessages",
-                    server_message="Skipping reading messages."
-                )
-                context.cancel()
-                return 
-            elif choice not in ["1", "2"]:
-                yield chat_pb2.CheckMessagesResponse(
-                    command="checkmessages",
-                    server_message="Invalid choice. Aborting."
-                )
-                context.cancel()
-            with connectsql() as db:
-                with db.cursor() as cur:
-                    cur.execute("SELECT sender, COUNT(*) as num FROM messages WHERE receiver=%s AND isread=False GROUP BY sender", (username,))
-                    senders_info = cur.fetchall()
-            if not senders_info:
-                yield chat_pb2.CheckMessagesResponse(
-                    command="checkmessages",
-                    server_message="No unread messages found."
-                )
-                return
-            senders_str = ", ".join([f"{r[0]}({r[1]})" for r in senders_info])
-            yield chat_pb2.CheckMessagesResponse(
-                command="checkmessages",
-                server_message=f"You have unread messages from:\n{senders_str}\nWhich sender do you want to read from?"
-            )
-            req = next(req_iter, None)
-            if req is None or not req.sender.strip():
-                yield chat_pb2.CheckMessagesResponse(
-                    command="checkmessages",
-                    server_message="No sender provided. Aborting."
-                )
-                return
-            chosen_sender = req.sender.strip()
-            with connectsql() as db:
-                with db.cursor() as cur:
-                    cur.execute("SELECT messageid, sender, message, datetime FROM messages WHERE receiver=%s AND sender=%s AND isread=False ORDER BY messageid", (username, chosen_sender))
-                    msgs = cur.fetchall()
-            if not msgs:
-                yield chat_pb2.CheckMessagesResponse(
-                    command="checkmessages",
-                    server_message=f"No unread messages from {chosen_sender}."
-                )
-                return
-            batch_size = 5
-            i = 0
-            while i < len(msgs):
-                batch = msgs[i:i+batch_size]
-                for m in batch: # 0: messageid, 1: sender, 2: message, 3: datetime
-                    ts = m[3].strftime("%Y-%m-%d %H:%M:%S")
-                    yield chat_pb2.CheckMessagesResponse(
-                        command="checkmessages",
-                        server_message=f"{ts} {m[1]}: {m[2]}",
-                        sender=m[1],
-                        message_body=m[2]
-                    )
-                batch_ids = [m[0] for m in batch]
-                with connectsql() as db:
-                    with db.cursor() as cur:
-                        if len(batch_ids) == 1:
-                            cur.execute("UPDATE messages SET isread=True WHERE messageid=%s", (batch_ids[0],))
-                        else:
-                            placeholders = ','.join(['%s'] * len(batch_ids))
-                            cur.execute(f"UPDATE messages SET isread=True WHERE messageid IN ({placeholders})", batch_ids)
-                    db.commit()
-                yield chat_pb2.CheckMessagesResponse(
-                    command="checkmessages",
-                    server_message="(The current batch of messages has been marked as read.)"
-                )
-                i += batch_size
-                if i < len(msgs):
-                    yield chat_pb2.CheckMessagesResponse(
-                        command="checkmessages",
-                        server_message="Type anything to see the next batch of messages..."
-                    )
-                    try:
-                        _ = next(req_iter)
-                    except StopIteration:
-                        break
-            yield chat_pb2.CheckMessagesResponse(
-                command="checkmessages",
-                server_message="All messages from this sender have been read."
-            )
-        except Exception as e:
-            traceback.print_exc()
-            yield chat_pb2.CheckMessagesResponse(
-                command="checkmessages",
-                server_message="Error: " + str(e)
-            )
-    
-    def History(self, request_iterator, context):
-        # given a userID, can see all of the chat history with that specific user
-        try:
-            yield chat_pb2.Response(
-                command="history",
-                server_message="Enter userID of the user whose chat history you'd like to view:"
-            )
-            req_iter = iter(request_iterator)
-            confirmation = ""
-            while not confirmation:
-                req = next(req_iter)
-                confirmation = req.confirmation.strip().lower()
-            username = req.username.strip()
-            if confirmation:
-                with connectsql() as db:
-                    with db.cursor() as cur:
-                        cur.execute("SELECT * FROM messages WHERE sender=%s AND receiver=%s", (username, confirmation))
-                        msgs_sent = cur.fetchall()
-                        cur.execute("SELECT * FROM messages WHERE sender=%s AND receiver=%s", (confirmation, username))
-                        msgs_recieved = cur.fetchall()
-                msgs = msgs_sent + list(msgs_recieved)  
-                msgs_sorted = sorted(msgs, key=lambda x: x['datetime']) 
-                chat_history = "\n".join([f"{m['datetime']} {m['sender']}: {m['message']}" for m in msgs_sorted])
-                yield chat_pb2.Response(
-                    command="history",
-                    server_message=chat_history if chat_history else "No message history available."
-                )
-            else:
-                yield chat_pb2.Response(
-                    command="history",
-                    server_message="History view canceled."
-                )
-        except Exception as e:
-            traceback.print_exc()
-            yield chat_pb2.Response(
-                command="history",
-                server_message="Error: " + str(e)
-            )
-
-
 
     def Logoff(self, request, context):
+        print(f"[DEBUG] Client {context.peer()} called Logoff")
+
         username = request.username.strip()
         if not username:
             return chat_pb2.Response(
@@ -396,98 +290,100 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 server_message="No username provided."
             )
         try:
-            with connectsql() as db:
-                with db.cursor() as cur:
-                    cur.execute("UPDATE users SET active=0 WHERE username=%s", (username,))
-                db.commit()
+            self.local_write(
+                "UPDATE users SET active=0 WHERE username=%s",
+                (username,)
+            )
+            self.replicate_to_others(
+                "UPDATE users SET active=0 WHERE username=%s",
+                (username,)
+            )
             return chat_pb2.Response(
                 command="logoff",
                 server_message=f"{username} has been logged off."
             )
-        except Exception:
+        except Exception as e:
             traceback.print_exc()
             return chat_pb2.Response(
                 command="logoff",
-                server_message="Logoff error."
+                server_message="Logoff error: " + str(e)
             )
 
     def SearchUsers(self, request, context):
+        print(f"[DEBUG] Client {context.peer()} called SearchUsers")
+
         username = request.username.strip()
         try:
-            with connectsql() as db:
-                with db.cursor() as cur:
-                    cur.execute("SELECT username FROM users")
-                    rows = cur.fetchall()
+            rows = self.local_read("SELECT username FROM users", ())
             all_users = [r[0] for r in rows if r[0] != username]
             return chat_pb2.SearchResponse(
                 success=True,
                 usernames=all_users,
                 server_message="User list retrieved."
             )
-        except Exception:
+        except Exception as e:
             traceback.print_exc()
             return chat_pb2.SearchResponse(
                 success=False,
                 usernames=[],
-                server_message="Error searching users."
+                server_message="Error searching users: " + str(e)
             )
 
     def DeleteLastMessage(self, request_iterator, context):
-        """
-        Two-step bidirectional conversation for deleting the last unread message:
-        1. The client sends a DeleteRequest (confirmation empty) to trigger the prompt.
-        2. The server looks up the last unread message and yields a prompt showing its details.
-        3. The client sends a second DeleteRequest with a confirmation.
-            If 'yes', the message is deleted; otherwise, deletion is canceled.
-        """
+        print(f"[DEBUG] Client {context.peer()} called DeleteLastMessage")
+
         try:
             req_iter = iter(request_iterator)
-            # First request: username (confirmation may be empty)
             first_req = next(req_iter, None)
-            if first_req is None or not first_req.username.strip():
+            if not first_req or not first_req.username.strip():
                 yield chat_pb2.Response(
                     command="delete",
                     server_message="No username provided. Aborting."
                 )
                 return
             username = first_req.username.strip()
-            # Look up the last unread message for this user.
-            with connectsql() as db:
-                with db.cursor() as cur:
-                    cur.execute(
-                        "SELECT messageid, message, receiver FROM messages WHERE sender=%s AND isread=False ORDER BY messageid DESC LIMIT 1",
-                        (username,)
-                    )
-                    row = cur.fetchone()
-            if not row:
+
+            # Find last unread message from this sender
+            unread_rows = self.local_read(
+                "SELECT messageid, message, receiver FROM messages "
+                "WHERE sender=%s AND isread=False ORDER BY messageid DESC LIMIT 1",
+                (username,)
+            )
+            if not unread_rows:
                 yield chat_pb2.Response(
                     command="delete",
                     server_message="No unread messages to delete."
                 )
                 return
-            # Yield a prompt showing the message details.
+            msgid, msgtxt, recv = unread_rows[0]
             yield chat_pb2.Response(
                 command="delete",
-                server_message=f"Your last unread message is: '{row['message']}' sent to {row['receiver']}. Do you want to delete it? (yes/no)"
+                server_message=f"Last unread message: '{msgtxt}' -> {recv}. Delete it? (yes/no)"
             )
-            # Wait for the second request with the confirmation.
+
             second_req = next(req_iter, None)
-            if second_req is None or not second_req.confirmation.strip():
+            if not second_req or not second_req.confirmation.strip():
                 yield chat_pb2.Response(
                     command="delete",
                     server_message="No confirmation provided. Delete canceled."
                 )
                 return
-            confirmation = second_req.confirmation.strip().lower()
-            if confirmation == "yes":
-                with connectsql() as db:
-                    with db.cursor() as cur:
-                        cur.execute("DELETE FROM messages WHERE messageid=%s", (row['messageid'],))
-                    db.commit()
-                yield chat_pb2.Response(
-                    command="delete",
-                    server_message="Your last unread message was deleted."
-                )
+            if second_req.confirmation.strip().lower() == "yes":
+                try:
+                    self.local_write("DELETE FROM messages WHERE messageid=%s", (msgid,))
+                    self.replicate_to_others(
+                        "DELETE FROM messages WHERE messageid=%s",
+                        (msgid,)
+                    )
+                    yield chat_pb2.Response(
+                        command="delete",
+                        server_message="Message deleted."
+                    )
+                except Exception as e:
+                    yield chat_pb2.Response(
+                        command="delete",
+                        server_message="Error deleting message: " + str(e)
+                    )
             else:
                 yield chat_pb2.Response(
                     command="delete",
@@ -501,27 +397,51 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             )
 
     def DeactivateAccount(self, request_iterator, context):
+        print(f"[DEBUG] Client {context.peer()} called DeactivateAccount")
+
         try:
+            req_iter = iter(request_iterator)
+            first_req = next(req_iter, None)
+            if not first_req or not first_req.username.strip():
+                yield chat_pb2.Response(
+                    command="deactivate",
+                    server_message="No username provided."
+                )
+                return
+            username = first_req.username.strip()
+
+            # Prompt user for yes/no
             yield chat_pb2.Response(
                 command="deactivate",
                 server_message="Are you sure you want to deactivate your account? (yes/no)"
             )
-            req_iter = iter(request_iterator)
-            confirmation = ""
-            while not confirmation:
-                req = next(req_iter)
-                confirmation = req.confirmation.strip().lower()
-            username = req.username.strip()
-            if confirmation == 'yes':
-                with connectsql() as db:
-                    with db.cursor() as cur:
-                        cur.execute("DELETE FROM messages WHERE sender=%s", (username,))
-                        cur.execute("DELETE FROM users WHERE username=%s", (username,))
-                    db.commit()
+
+            second_req = next(req_iter, None)
+            if not second_req or not second_req.confirmation.strip():
                 yield chat_pb2.Response(
                     command="deactivate",
-                    server_message="Your account and sent messages are removed."
+                    server_message="No confirmation. Canceled."
                 )
+                return
+            if second_req.confirmation.strip().lower() == "yes":
+                try:
+                    self.local_write("DELETE FROM messages WHERE sender=%s", (username,))
+                    self.local_write("DELETE FROM messages WHERE receiver=%s", (username,))
+                    self.local_write("DELETE FROM users WHERE username=%s", (username,))
+
+                    self.replicate_to_others("DELETE FROM messages WHERE sender=%s", (username,))
+                    self.local_write("DELETE FROM messages WHERE receiver=%s", (username,))
+                    self.replicate_to_others("DELETE FROM users WHERE username=%s", (username,))
+
+                    yield chat_pb2.Response(
+                        command="deactivate",
+                        server_message="Your account and sent messages are removed."
+                    )
+                except Exception as e:
+                    yield chat_pb2.Response(
+                        command="deactivate",
+                        server_message="Error removing account: " + str(e)
+                    )
             else:
                 yield chat_pb2.Response(
                     command="deactivate",
@@ -533,46 +453,224 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 command="deactivate",
                 server_message="Error: " + str(e)
             )
-    
+
+    def CheckMessages(self, request_iterator, context):
+        print(f"[DEBUG] Client {context.peer()} called CheckMessages")
+
+        try:
+            req_iter = iter(request_iterator)
+            first_req = next(req_iter, None)
+            if first_req is None or not first_req.username.strip():
+                yield chat_pb2.CheckMessagesResponse(
+                    command="checkmessages",
+                    server_message="No username provided. Aborting."
+                )
+                return
+            username = first_req.username.strip()
+
+            # Count unread
+            unread_rows = self.local_read(
+                "SELECT COUNT(*) FROM messages WHERE receiver=%s AND isread=False",
+                (username,)
+            )
+            unread_count = unread_rows[0][0]
+            if unread_count == 0:
+                yield chat_pb2.CheckMessagesResponse(
+                    command="checkmessages",
+                    server_message="You have 0 unread messages."
+                )
+                return
+            yield chat_pb2.CheckMessagesResponse(
+                command="checkmessages",
+                server_message=(
+                    f"You have {unread_count} unread message(s).\n"
+                    "Type '1' to read them, or '2' to skip."
+                )
+            )
+
+            req_choice = next(req_iter, None)
+            if not req_choice or req_choice.choice.strip() not in ["1", "2"]:
+                yield chat_pb2.CheckMessagesResponse(
+                    command="checkmessages",
+                    server_message="Invalid choice. Aborting."
+                )
+                context.cancel()
+                return
+            if req_choice.choice.strip() == "2":
+                yield chat_pb2.CheckMessagesResponse(
+                    command="checkmessages",
+                    server_message="Skipping reading messages."
+                )
+                context.cancel()
+                return
+
+            # Summarize senders
+            sender_counts = self.local_read(
+                "SELECT sender, COUNT(*) FROM messages WHERE receiver=%s AND isread=False GROUP BY sender",
+                (username,)
+            )
+            if not sender_counts:
+                yield chat_pb2.CheckMessagesResponse(
+                    command="checkmessages",
+                    server_message="No unread messages found."
+                )
+                return
+            senders_str = ", ".join([f"{row[0]}({row[1]})" for row in sender_counts])
+            yield chat_pb2.CheckMessagesResponse(
+                command="checkmessages",
+                server_message=f"Unread from: {senders_str}\nWhich sender do you want to read?"
+            )
+
+            req_sender = next(req_iter, None)
+            if not req_sender or not req_sender.sender.strip():
+                yield chat_pb2.CheckMessagesResponse(
+                    command="checkmessages",
+                    server_message="No sender provided. Aborting."
+                )
+                return
+            chosen_sender = req_sender.sender.strip()
+
+            msgs_rows = self.local_read(
+                "SELECT messageid, sender, message, datetime "
+                "FROM messages WHERE receiver=%s AND sender=%s AND isread=False ORDER BY messageid",
+                (username, chosen_sender)
+            )
+            if not msgs_rows:
+                yield chat_pb2.CheckMessagesResponse(
+                    command="checkmessages",
+                    server_message=f"No unread messages from {chosen_sender}."
+                )
+                return
+
+            batch_size = 5
+            index = 0
+            while index < len(msgs_rows):
+                batch = msgs_rows[index : index + batch_size]
+                for row in batch:
+                    msg_id, msg_sender, msg_body, msg_dt = row
+                    dt_str = msg_dt.strftime("%Y-%m-%d %H:%M:%S")
+                    yield chat_pb2.CheckMessagesResponse(
+                        command="checkmessages",
+                        server_message=f"{dt_str} {msg_sender}: {msg_body}"
+                    )
+                # Mark them read
+                msg_ids = [r[0] for r in batch]
+                placeholders = ", ".join(["%s"] * len(msg_ids))
+                sql_update = f"UPDATE messages SET isread=True WHERE messageid IN ({placeholders})"
+                try:
+                    self.local_write(sql_update, msg_ids)
+                    # replicate the isread update
+                    self.replicate_to_others(sql_update, msg_ids)
+                except Exception as e:
+                    yield chat_pb2.CheckMessagesResponse(
+                        command="checkmessages",
+                        server_message="Error marking batch read: " + str(e)
+                    )
+                yield chat_pb2.CheckMessagesResponse(
+                    command="checkmessages",
+                    server_message="(Batch of messages marked as read.)"
+                )
+                index += batch_size
+                if index < len(msgs_rows):
+                    yield chat_pb2.CheckMessagesResponse(
+                        command="checkmessages",
+                        server_message="Type anything to see the next batch..."
+                    )
+                    _ = next(req_iter, None)  # just wait for user input
+
+            yield chat_pb2.CheckMessagesResponse(
+                command="checkmessages",
+                server_message="All messages from this sender have been read."
+            )
+        except Exception as e:
+            traceback.print_exc()
+            yield chat_pb2.CheckMessagesResponse(
+                command="checkmessages",
+                server_message="Error in CheckMessages: " + str(e)
+            )
+
     def ReceiveMessages(self, request, context):
-        """Continuously poll the database for unread messages and stream them to the client."""
+        print(f"[DEBUG] Client {context.peer()} called ReceiveMessages")
+
         username = request.username.strip()
         while context.is_active():
-            with connectsql() as db:
-                with db.cursor() as cur:
-                    cur.execute("SELECT messageid, sender, message, datetime FROM messages WHERE receiver=%s AND isread=False ORDER BY datetime", (username,))
-                    msgs = cur.fetchall()
-            if msgs:
-                for m in msgs:
-                    ts = m[3].strftime("%Y-%m-%d %H:%M:%S") # 3: datetime
+            # read any unread messages
+            rows = self.local_read(
+                "SELECT messageid, sender, message, datetime "
+                "FROM messages WHERE receiver=%s AND isread=False ORDER BY datetime",
+                (username,)
+            )
+            if rows:
+                # stream them to the client
+                for row in rows:
+                    msgid, sender, msg_body, msg_dt = row
+                    ts = msg_dt.strftime("%Y-%m-%d %H:%M:%S")
                     yield chat_pb2.ReceiveResponse(
-                        sender=m[1], # 1: sender
-                        message=m[2], # 2: message
+                        sender=sender,
+                        message=msg_body,
                         timestamp=ts
                     )
-                # Mark these messages as read:
-                batch_ids = [m[0] for m in msgs] # 0: messageid
-                with connectsql() as db:
-                    with db.cursor() as cur:
-                        placeholders = ','.join(['%s'] * len(batch_ids))
-                        cur.execute(f"UPDATE messages SET isread=True WHERE messageid IN ({placeholders})", batch_ids)
-                    db.commit()
-            time.sleep(1)  
+                # mark them read
+                msg_ids = [r[0] for r in rows]
+                placeholders = ", ".join(["%s"] * len(msg_ids))
+                sql_update = f"UPDATE messages SET isread=True WHERE messageid IN ({placeholders})"
+                try:
+                    self.local_write(sql_update, msg_ids)
+                    self.replicate_to_others(sql_update, msg_ids)
+                except Exception as e:
+                    print("Error marking messages read:", e)
+            time.sleep(1)
 
+########################################
+# 4. Build stubs to other servers
+########################################
+def build_other_stubs(this_hostport):
+    """
+    Suppose we have 3 known addresses: :5432, :5433, :5434
+    We skip our own host:port so we only replicate to the others.
+    Return a list of ChatStub objects.
+    """
+    addresses = [
+        "10.250.52.124:5432",
+        "10.250.52.124:5433",
+        "10.250.52.124:5434",
+    ]
+    other_addresses = [addr for addr in addresses if addr != this_hostport]
+    stubs = []
+    for addr in other_addresses:
+        channel = grpc.insecure_channel(addr)
+        stub = chat_pb2_grpc.ChatStub(channel)
+        stubs.append(stub)
+    return stubs
+
+########################################
+# 5. Run the server
+########################################
 def serve():
+    parser = argparse.ArgumentParser(description="RPC-based replication: single local DB + replicate to others")
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--port", type=int, default=5432)
+    parser.add_argument("--replica_id", type=int, default=1, help="Which DB config to load (1..3).")
+    args = parser.parse_args()
+
+    # Connect to local DB
+    local_conn = connectSingleDB(args.replica_id)
+    if not local_conn:
+        print("Could not connect to local DB. Exiting.")
+        return
+
+    # Build stubs for other servers
+    this_hostport = f"{args.host}:{args.port}"
+    other_stubs = build_other_stubs(this_hostport)
+
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-    chat_pb2_grpc.add_ChatServicer_to_server(ChatService(), server)
-    address = f"{HOST}:{PORT}"
+    chat_service = ChatService(local_conn, other_stubs)
+    chat_pb2_grpc.add_ChatServicer_to_server(chat_service, server)
+
+    address = f"{args.host}:{args.port}"
     server.add_insecure_port(address)
     server.start()
-    print(f"Server started on {address}")
-    try:
-        with connectsql() as db:
-            with db.cursor() as cur:
-                cur.execute("UPDATE users SET active=0")
-            db.commit()
-    except Exception as e:
-        print("Error resetting active status:", e)
+    print(f"Server started on {address} (replica {args.replica_id}), using RPC-based replication.")
     server.wait_for_termination()
 
 if __name__ == "__main__":

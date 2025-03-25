@@ -54,15 +54,15 @@ Run `ipconfig getifaddr en0` to get your laptop's IP address. Then run `mysql -h
 There are two servers. One running with JSON and the other via a custom wire protocol. 
 -  To run the JSON version, run 
    ```sh
-   python serverJson.py --host 10.250.213.39 --port 50000
+   python serverJson.py --host 10.250.52.124 --port 50000
      ```
 -  To run the custom wire protocol version, run 
    ```sh
-   python serverCustom.py --host 10.250.213.39 --port 50000
+   python serverCustom.py --host 10.250.52.124 --port 50000
    ```
 -  To run the RPC version, run 
    ```sh
-   python serverRPC.py --host 10.250.213.39 --port 50000
+   python serverRPC.py --host 10.250.52.124 --port 50000
    ```
 
 ### Running the Client
@@ -71,15 +71,15 @@ There are two clients. One running with JSON and the other via a custom wire pro
 Howver, if you run a JSON server, you must run a JSON client, vice versa.  
 -  To run the JSON version, run 
    ```sh
-   python clientJSON.py --host 10.250.213.39 --port 50000
+   python clientJSON.py --host 10.250.52.124 --port 50000
      ```
 -  To run the custom wire protocol version, run 
    ```sh
-   python clientCustom.py --host 10.250.213.39 --port 50000
+   python clientCustom.py --host 10.250.52.124 --port 50000
    ```
 -  To run the RPC version, run 
    ```sh
-   python clientRPC.py --host 10.250.213.39 --port 50000
+   python clientRPC.py --host 10.250.52.124 --port 50000
    ```
 3. A GUI window should appear for login, registration, and messaging.
 
@@ -129,7 +129,7 @@ coverage report -m
 
 ServerRPC:
 ```
-python serverRPC.py --host 10.250.213.39 --port 50000
+python serverRPC.py --host 10.250.52.124 --port 50000
 coverage run --source=serverRPC testServerRPC.py
 coverage report -m
 ```

@@ -11,6 +11,7 @@ service Chat {
     rpc DeleteLastMessage(stream DeleteRequest) returns (stream Response);
     rpc DeactivateAccount(stream DeactivateRequest) returns (stream Response);
     rpc ReceiveMessages(ReceiveRequest) returns (stream ReceiveResponse);
+    rpc ReplicateWrite(ReplicateRequest) returns (ReplicateResponse);
 }
 
 // Registration
@@ -96,4 +97,13 @@ message ReceiveResponse {
     string sender = 1;
     string message = 2;
     string timestamp = 3;
+}
+
+message ReplicateRequest {
+  string sql = 1;
+  repeated string params = 2;
+}
+message ReplicateResponse {
+  bool success = 1;
+  string message = 2;
 }

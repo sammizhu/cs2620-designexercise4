@@ -84,6 +84,11 @@ class ChatStub(object):
                 request_serializer=chat__pb2.ReceiveRequest.SerializeToString,
                 response_deserializer=chat__pb2.ReceiveResponse.FromString,
                 _registered_method=True)
+        self.ReplicateWrite = channel.unary_unary(
+                '/Chat/ReplicateWrite',
+                request_serializer=chat__pb2.ReplicateRequest.SerializeToString,
+                response_deserializer=chat__pb2.ReplicateResponse.FromString,
+                _registered_method=True)
 
 
 class ChatServicer(object):
@@ -149,6 +154,12 @@ class ChatServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ReplicateWrite(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ChatServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -201,6 +212,11 @@ def add_ChatServicer_to_server(servicer, server):
                     servicer.ReceiveMessages,
                     request_deserializer=chat__pb2.ReceiveRequest.FromString,
                     response_serializer=chat__pb2.ReceiveResponse.SerializeToString,
+            ),
+            'ReplicateWrite': grpc.unary_unary_rpc_method_handler(
+                    servicer.ReplicateWrite,
+                    request_deserializer=chat__pb2.ReplicateRequest.FromString,
+                    response_serializer=chat__pb2.ReplicateResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -473,6 +489,33 @@ class Chat(object):
             '/Chat/ReceiveMessages',
             chat__pb2.ReceiveRequest.SerializeToString,
             chat__pb2.ReceiveResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ReplicateWrite(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/Chat/ReplicateWrite',
+            chat__pb2.ReplicateRequest.SerializeToString,
+            chat__pb2.ReplicateResponse.FromString,
             options,
             channel_credentials,
             insecure,
