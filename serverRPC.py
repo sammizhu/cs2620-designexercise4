@@ -90,33 +90,26 @@ class ChatService(chat_pb2_grpc.ChatServicer):
     ########################################
     def replicate_to_others(self, sql, params=()):
         """
-        Round-robin approach: keep trying each stub until one works or we've tried them all.
-        If one succeeds, we stop. If all fail, we just print an error.
+        Update all
         """
         if not self.other_stubs:
             return  # No other stubs at all.
 
         total = len(self.other_stubs)
 
-        for attempt in range(total):
-            # Move to the next stub in a ring
-            self.current_stub_index = (self.current_stub_index + 1) % total
-            stub = self.other_stubs[self.current_stub_index]
-
-            print(f"[DEBUG] replicate_to_others attempt {attempt+1}, trying stub index {self.current_stub_index}")
+        for i in range(total-1):
+            stub = self.other_stubs[i]
+            print(f"[DEBUG] replicate_to_others to stub {stub}")
             try:
                 resp = stub.ReplicateWrite(
                     chat_pb2.ReplicateRequest(sql=sql, params=params)
                 )
-                if resp.success:
-                    print(f"[DEBUG] replicate_to_others: success on stub index {self.current_stub_index}")
-                    return  # stop after one success
-                else:
-                    print(f"[DEBUG] replicate_to_others: stub {self.current_stub_index} returned error: {resp.message}")
+                if not resp.success:
+                    print(f"[DEBUG] replicate_to_others: stub {stub} returned error: {resp.message}")
             except Exception as ex:
-                print(f"[DEBUG] replicate_to_others: stub {self.current_stub_index} call failed: {ex}")
+                print(f"[DEBUG] replicate_to_others: stub {stub} call failed: {ex}")
 
-        print("[DEBUG] replicate_to_others: all stubs failed or returned error.")
+        print("[DEBUG] replicate_to_others: all stubs successfully updated.")
 
     ########################################
     # 3.C. The ReplicateWrite RPC
@@ -315,7 +308,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             return chat_pb2.SearchResponse(
                 success=True,
                 usernames=all_users,
-                server_message="User list retrieved."
+                server_message="User list: "
             )
         except Exception as e:
             traceback.print_exc()
@@ -365,7 +358,8 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             if second_req.confirmation.strip().lower() == "yes":
                 try:
                     self.local_write("DELETE FROM messages WHERE messageid=%s", (msgid,))
-                    self.replicate_to_others("DELETE FROM messages WHERE messageid=%s", (msgid,))
+                    msg_ids = [str(i) for i in msg_ids]
+                    self.replicate_to_others("DELETE FROM messages WHERE messageid=%s", (msgids,))
                     yield chat_pb2.Response(
                         command="delete",
                         server_message="Message deleted."
@@ -439,6 +433,49 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             traceback.print_exc()
             yield chat_pb2.Response(
                 command="deactivate",
+                server_message="Error: " + str(e)
+            )
+
+    def History(self, request_iterator, context):
+        try:
+            # Prompt the client for the username of the other user whose chat history they want to view.
+            yield chat_pb2.Response(
+                command="history",
+                server_message="Enter the username of the user whose chat history you'd like to view:"
+            )
+            req_iter = iter(request_iterator)
+            confirmation = ""
+            while not confirmation:
+                req = next(req_iter)
+                confirmation = req.confirmation.strip().lower()
+            username = req.username.strip()
+            if confirmation:
+                sql = (
+                    "SELECT messageid, sender, message, datetime "
+                    "FROM messages "
+                    "WHERE (sender=%s AND receiver=%s) OR (sender=%s AND receiver=%s) "
+                    "ORDER BY datetime"
+                )
+                params = (username, confirmation, confirmation, username)
+                msgs = self.local_read(sql, params)
+                # Format the chat history assuming row[3] is a datetime object.
+                chat_history = "\n".join([
+                    f"{row[3].strftime('%Y-%m-%d %H:%M:%S')} {row[1]}: {row[2]}"
+                    for row in msgs
+                ])
+                yield chat_pb2.Response(
+                    command="history",
+                    server_message=chat_history if chat_history else "No message history available."
+                )
+            else:
+                yield chat_pb2.Response(
+                    command="history",
+                    server_message="History view canceled."
+                )
+        except Exception as e:
+            traceback.print_exc()
+            yield chat_pb2.Response(
+                command="history",
                 server_message="Error: " + str(e)
             )
 
@@ -553,7 +590,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 sql_update = f"UPDATE messages SET isread=True WHERE messageid IN ({placeholders})"
                 try:
                     self.local_write(sql_update, msg_ids)
-                    self.replicate_to_others(sql_update, msg_ids)
+                    self.replicate_to_others(sql_update, [str(m) for m in msg_ids])
                 except Exception as e:
                     yield chat_pb2.CheckMessagesResponse(
                         command="checkmessages",
@@ -609,7 +646,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 sql_update = f"UPDATE messages SET isread=True WHERE messageid IN ({placeholders})"
                 try:
                     self.local_write(sql_update, msg_ids)
-                    self.replicate_to_others(sql_update, msg_ids)
+                    self.replicate_to_others(sql_update, [str(m) for m in msg_ids])
                 except Exception as e:
                     print("Error marking messages read:", e)
             time.sleep(1)
@@ -619,9 +656,9 @@ class ChatService(chat_pb2_grpc.ChatServicer):
 ########################################
 def build_other_stubs(this_hostport):
     addresses = [
-        "10.250.52.124:5432",
-        "10.250.52.124:5433",
-        "10.250.52.124:5434",
+        "10.250.52.124:65432",
+        "10.250.52.124:65433",
+        "10.250.52.124:65434",
     ]
     other_addresses = [addr for addr in addresses if addr != this_hostport]
     stubs = []
