@@ -9,6 +9,10 @@ import chat_pb2
 import chat_pb2_grpc
 import psycopg2
 from configparser import ConfigParser
+import threading
+import socket
+import signal
+import sys
 
 ########################################
 # 1. Single-DB config
@@ -57,23 +61,64 @@ def hashPass(password):
     hashed = bcrypt.hashpw(password.encode('utf-8'), salt)
     return hashed.decode('utf-8')
 
+
 ########################################
-# 3. ChatService with RPC-based replication
+# 3. ChatService with RPC-based replication + simple leader election
 ########################################
 class ChatService(chat_pb2_grpc.ChatServicer):
-    def __init__(self, db_conn, other_stubs):
+    def __init__(self, db_conn, other_stubs, my_port):
         """
         :param db_conn: psycopg2 connection to THIS server's local DB
         :param other_stubs: list of stubs for the OTHER servers so we can replicate
+        :param my_port: The TCP port this server is running on
         """
         super().__init__()
         self.db_conn = db_conn
         self.other_stubs = other_stubs  # list of ChatStub objects for the other servers
-        # Keep track of which stub we'll try first in replicate_to_others
-        self.current_stub_index = 0
+        self.my_port = my_port
+
+        # We define a fixed set of known ports for the cluster:
+        self.ports_sorted = [65432, 65433, 65434]
+        # We'll track is_leader with a naive check
+        self.is_leader = False
+
+        # Start a background thread to periodically check if any smaller port is alive.
+        t = threading.Thread(target=self.leader_check_loop, daemon=True)
+        t.start()
 
     ########################################
-    # 3.A. Local DB read/write
+    # 3.A. Leader Check Logic
+    ########################################
+    def leader_check_loop(self):
+        while True:
+            self.update_is_leader()
+            time.sleep(0.5)  # check every 2 seconds
+
+    def update_is_leader(self):
+        # get all ports smaller than my_port
+        smaller_ports = [p for p in self.ports_sorted if p < self.my_port]
+        # if ANY smaller port is alive, we are NOT leader
+        for p in smaller_ports:
+            if self.is_port_alive("10.250.52.124", p):
+                print(p, "is still alive")
+                self.is_leader = False
+                return
+        # If we found no smaller live port, we become leader
+        self.is_leader = True
+
+    def is_port_alive(self, host, port):
+        """Simple TCP check to see if the server is listening on (host, port)."""
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.5)
+        try:
+            s.connect((host, port))
+            s.close()
+            return True
+        except:
+            return False
+
+    ########################################
+    # 3.B. Local DB read/write
     ########################################
     def local_write(self, sql, params=()):
         with self.db_conn.cursor() as cur:
@@ -86,7 +131,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             return cur.fetchall()
 
     ########################################
-    # 3.B. replicate_to_others with round-robin attempt
+    # 3.C. replicate_to_others
     ########################################
     def replicate_to_others(self, sql, params=()):
         """
@@ -96,7 +141,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             return  # No other stubs at all.
 
         total = len(self.other_stubs)
-
         for i in range(total):
             stub = self.other_stubs[i]
             print(f"[DEBUG] replicate_to_others to stub {stub}")
@@ -112,7 +156,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
         print("[DEBUG] replicate_to_others: all stubs successfully updated.")
 
     ########################################
-    # 3.C. The ReplicateWrite RPC
+    # 3.D. The ReplicateWrite RPC
     ########################################
     def ReplicateWrite(self, request, context):
         """
@@ -130,7 +174,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             return chat_pb2.ReplicateResponse(success=False, message=str(e))
 
     ########################################
-    # 3.D. Additional helpers
+    # 3.E. Additional helpers
     ########################################
     def checkRealUsername(self, username):
         rows = self.local_read("SELECT COUNT(*) FROM users WHERE username=%s", (username,))
@@ -144,10 +188,18 @@ class ChatService(chat_pb2_grpc.ChatServicer):
         return bcrypt.checkpw(plain_text.encode('utf-8'), stored_hash.encode('utf-8'))
 
     ########################################
-    # 3.E. All user-facing RPCs
+    # 3.F. All user-facing RPCs (with leader check for writes)
     ########################################
     def Register(self, request, context):
         print(f"[DEBUG] Client {context.peer()} called Register")
+
+        # If not leader, reject writes
+        if not self.is_leader:
+            self.update_is_leader()
+            return chat_pb2.Response(
+                command="1",
+                server_message="This server is a BACKUP; please connect to the leader for registration."
+            )
 
         reg_username = request.username.strip()
         reg_password = request.password.strip()
@@ -200,6 +252,14 @@ class ChatService(chat_pb2_grpc.ChatServicer):
     def Login(self, request, context):
         print(f"[DEBUG] Client {context.peer()} called Login")
 
+        # If not leader, reject writes
+        if not self.is_leader:
+            self.update_is_leader()
+            return chat_pb2.Response(
+                command="2",
+                server_message="This server is a BACKUP; please connect to the leader to login."
+            )
+
         username = request.username.strip()
         password = request.password.strip()
 
@@ -240,6 +300,14 @@ class ChatService(chat_pb2_grpc.ChatServicer):
     def SendMessage(self, request, context):
         print(f"[DEBUG] Client {context.peer()} called SendMessage")
 
+        # If not leader, reject writes
+        if not self.is_leader:
+            self.update_is_leader()
+            return chat_pb2.SendMessageResponse(
+                success=False,
+                server_message="This server is a BACKUP; please connect to the leader to send messages."
+            )
+
         full_text = request.message.strip()
         md = dict(context.invocation_metadata())
         sender = md.get("username", "unknown")
@@ -278,6 +346,15 @@ class ChatService(chat_pb2_grpc.ChatServicer):
 
     def Logoff(self, request, context):
         print(f"[DEBUG] Client {context.peer()} called Logoff")
+
+        # If not leader, reject writes
+        if not self.is_leader:
+            self.update_is_leader()
+            return chat_pb2.Response(
+                command="logoff",
+                server_message="This server is a BACKUP; connect to the leader to log off."
+            )
+
         username = request.username.strip()
         if not username:
             return chat_pb2.Response(
@@ -299,8 +376,12 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             )
 
     def SearchUsers(self, request, context):
+        """
+        READ-ONLY - Even a backup server can handle read queries if you prefer.
+        In a strict single-leader system, you might direct all reads to the leader as well.
+        For demonstration, we'll allow the backup to handle read queries. 
+        """
         print(f"[DEBUG] Client {context.peer()} called SearchUsers")
-
         username = request.username.strip()
         try:
             rows = self.local_read("SELECT username FROM users", ())
@@ -320,6 +401,16 @@ class ChatService(chat_pb2_grpc.ChatServicer):
 
     def DeleteLastMessage(self, request_iterator, context):
         print(f"[DEBUG] Client {context.peer()} called DeleteLastMessage")
+
+        # If not leader, reject writes
+        if not self.is_leader:
+            self.update_is_leader()
+            yield chat_pb2.Response(
+                command="delete",
+                server_message="This server is a BACKUP; connect to the leader to delete messages."
+            )
+            return
+
         try:
             req_iter = iter(request_iterator)
             first_req = next(req_iter, None)
@@ -358,8 +449,8 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             if second_req.confirmation.strip().lower() == "yes":
                 try:
                     self.local_write("DELETE FROM messages WHERE messageid=%s", (msgid,))
-                    msg_ids = [str(i) for i in msg_ids]
-                    self.replicate_to_others("DELETE FROM messages WHERE messageid=%s", (msgids,))
+                    msg_ids = [str(msgid)]
+                    self.replicate_to_others("DELETE FROM messages WHERE messageid=%s", msg_ids)
                     yield chat_pb2.Response(
                         command="delete",
                         server_message="Message deleted."
@@ -383,6 +474,16 @@ class ChatService(chat_pb2_grpc.ChatServicer):
 
     def DeactivateAccount(self, request_iterator, context):
         print(f"[DEBUG] Client {context.peer()} called DeactivateAccount")
+
+        # If not leader, reject writes
+        if not self.is_leader:
+            self.update_is_leader()
+            yield chat_pb2.Response(
+                command="deactivate",
+                server_message="This server is a BACKUP; connect to the leader to deactivate your account."
+            )
+            return
+
         try:
             req_iter = iter(request_iterator)
             first_req = next(req_iter, None)
@@ -437,13 +538,17 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             )
 
     def History(self, request_iterator, context):
+        """
+        This is read-only, so if you want backups to handle it, that's okay.
+        We'll allow reading on backups here.
+        """
+        print(f"[DEBUG] Client {context.peer()} called History")
         try:
-            # Prompt the client for the username of the other user whose chat history they want to view.
+            req_iter = iter(request_iterator)
             yield chat_pb2.Response(
                 command="history",
                 server_message="Enter the username of the user whose chat history you'd like to view:"
             )
-            req_iter = iter(request_iterator)
             confirmation = ""
             while not confirmation:
                 req = next(req_iter)
@@ -458,7 +563,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 )
                 params = (username, confirmation, confirmation, username)
                 msgs = self.local_read(sql, params)
-                # Format the chat history assuming row[3] is a datetime object.
                 chat_history = "\n".join([
                     f"{row[3].strftime('%Y-%m-%d %H:%M:%S')} {row[1]}: {row[2]}"
                     for row in msgs
@@ -480,6 +584,12 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             )
 
     def CheckMessages(self, request_iterator, context):
+        """
+        Checking messages can be read-only or partially modifies 'isread=True' in messages.
+        For simplicity, let's allow backups to also do this if you want.
+        Or you can restrict it to leader if you want strict single-master writes.
+        We'll let backups do it for demonstration.
+        """
         print(f"[DEBUG] Client {context.peer()} called CheckMessages")
         try:
             req_iter = iter(request_iterator)
@@ -492,7 +602,7 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 return
             username = first_req.username.strip()
 
-            # Count unread
+            # The rest is your existing logic
             unread_rows = self.local_read(
                 "SELECT COUNT(*) FROM messages WHERE receiver=%s AND isread=False",
                 (username,)
@@ -535,7 +645,6 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                 context.cancel()
                 return
 
-            # Summarize senders
             sender_counts = self.local_read(
                 "SELECT sender, COUNT(*) FROM messages WHERE receiver=%s AND isread=False GROUP BY sender",
                 (username,)
@@ -620,18 +729,21 @@ class ChatService(chat_pb2_grpc.ChatServicer):
             )
 
     def ReceiveMessages(self, request, context):
+        """
+        We'll allow backups to handle receiving read messages as well,
+        but strictly speaking if it modifies 'isread', you might prefer only the leader do so.
+        We'll keep your existing logic for demonstration.
+        """
         print(f"[DEBUG] Client {context.peer()} called ReceiveMessages")
 
         username = request.username.strip()
         while context.is_active():
-            # read any unread messages
             rows = self.local_read(
                 "SELECT messageid, sender, message, datetime "
                 "FROM messages WHERE receiver=%s AND isread=False ORDER BY datetime",
                 (username,)
             )
             if rows:
-                # stream them to the client
                 for row in rows:
                     msgid, sender, msg_body, msg_dt = row
                     ts = msg_dt.strftime("%Y-%m-%d %H:%M:%S")
@@ -651,12 +763,13 @@ class ChatService(chat_pb2_grpc.ChatServicer):
                     print("Error marking messages read:", e)
             time.sleep(1)
 
+
 ########################################
 # 4. Build stubs to other servers
 ########################################
 def build_other_stubs(this_hostport):
     addresses = [
-        "10.250.244.76:65432",
+        "10.250.52.124:65432",
         "10.250.52.124:65433",
         "10.250.52.124:65434",
     ]
@@ -672,9 +785,10 @@ def build_other_stubs(this_hostport):
 # 5. Run the server
 ########################################
 def serve():
-    parser = argparse.ArgumentParser(description="RPC-based replication: single local DB + replicate to others")
+    parser = argparse.ArgumentParser(description="RPC-based replication + naive leader election + single local DB.")
     parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", type=int, default=5432)
+    parser.add_argument("--port", type=int, default=65432,
+                        help="Port to run the gRPC server on (e.g. 65432/65433/65434).")
     parser.add_argument("--replica_id", type=int, default=1, help="Which DB config to load (1..3).")
     args = parser.parse_args()
 
@@ -687,13 +801,22 @@ def serve():
     other_stubs = build_other_stubs(this_hostport)
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-    chat_service = ChatService(local_conn, other_stubs)
+    chat_service = ChatService(local_conn, other_stubs, my_port=args.port)
     chat_pb2_grpc.add_ChatServicer_to_server(chat_service, server)
 
     address = f"{args.host}:{args.port}"
     server.add_insecure_port(address)
     server.start()
-    print(f"Server started on {address} (replica {args.replica_id}), using RPC-based replication.")
+    print(f"Server started on {address} (replica {args.replica_id}), with naive leader election.")
+
+    def handle_signal(*_):
+        print("Shutting down gRPC server gracefully...")
+        server.stop(0)  # 0 means no grace period; pass a number of seconds if you prefer
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, handle_signal)  # Catch Ctrl-C
+    signal.signal(signal.SIGTERM, handle_signal) # Also catch kill signals if you want
+
     server.wait_for_termination()
 
 if __name__ == "__main__":

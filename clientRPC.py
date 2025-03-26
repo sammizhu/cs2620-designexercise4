@@ -23,12 +23,11 @@ class ChatClient:
 
         # List of candidate servers for failover:
         self.server_candidates = [
-            ("10.250.244.76", 65432),  # primary
+            ("10.250.52.124", 65432),  # primary
             ("10.250.52.124", 65433),  # secondary
             ("10.250.52.124", 65434),  # tertiary
         ]
-        # Tracks which server we are currently using
-        self.current_server_index = 0
+        self.current_server_index = 0  # which server we are currently using
 
         # Build the frames/pages
         self.welcome_frame = tk.Frame(self.root)
@@ -59,47 +58,60 @@ class ChatClient:
     # ----------------------------------------------------------------
     # Utility: wrapper for all gRPC calls to handle failover
     # ----------------------------------------------------------------
-    def grpc_call(self, rpc_func, *args, **kwargs):
+    def grpc_call(self, method_name, *args, **kwargs):
         """
-        Attempt a gRPC call on the current stub. If it fails with UNAVAILABLE (server down)
-        or a similar error, move to the next server and retry once.
+        Attempt a gRPC call on the current stub. We pass the gRPC method name (string)
+        and then do getattr(self.stub, method_name). If it fails with UNAVAILABLE,
+        or a similar error, move to the next server in a round-robin fashion.
         """
+        # default short timeout if not given
+        if 'timeout' not in kwargs:
+            kwargs['timeout'] = 1.0
+
         try:
-            return rpc_func(*args, **kwargs)
+            stub_method = getattr(self.stub, method_name)
+            return stub_method(*args, **kwargs)
         except RpcError as e:
             if e.code() in (StatusCode.UNAVAILABLE, StatusCode.DEADLINE_EXCEEDED, StatusCode.INTERNAL):
                 print(f"[DEBUG] Server {self.server_candidates[self.current_server_index]} might be down. Failing over.")
-                return self.failover_and_retry(rpc_func, *args, **kwargs)
+                return self.failover_and_retry(method_name, *args, **kwargs)
             else:
                 print("[DEBUG] grpc_call caught RpcError:", e)
                 raise
-        except Exception as e:
-            print("[DEBUG] grpc_call caught generic exception:", e)
-            return self.failover_and_retry(rpc_func, *args, **kwargs)
+        except Exception as ex:
+            print("[DEBUG] grpc_call caught generic exception:", ex)
+            return self.failover_and_retry(method_name, *args, **kwargs)
 
-    def failover_and_retry(self, rpc_func, *args, **kwargs):
+    def failover_and_retry(self, method_name, *args, **kwargs):
         """
-        Keep trying the 'next' server (in a round-robin fashion) until one call succeeds
+        Keep trying the 'next' server in a round-robin fashion until one call succeeds
         or we've tried all servers. If all fail, raise an exception.
+        Also reorder the server list so the working server becomes index 0 after success.
         """
         total = len(self.server_candidates)
         original_index = self.current_server_index
 
-        for attempt in range(total):
+        # We'll try 'total-1' times, because we already tried the initial server
+        for attempt in range(total - 1):
             self.current_server_index = (self.current_server_index + 1) % total
 
-            # If we've looped around to the original index, we have tried them all
-            if attempt > 0 and self.current_server_index == original_index:
+            # If we've looped around to the original index, we've tried them all
+            if self.current_server_index == original_index:
                 break
 
             srv_host, srv_port = self.server_candidates[self.current_server_index]
             print(f"[DEBUG] Failover attempt {attempt+1}: trying {srv_host}:{srv_port}...")
             self.connect_to_server(self.current_server_index)
 
+            new_rpc_func = getattr(self.stub, method_name)
             try:
                 # Attempt the same RPC call on the new server
-                print(*args, **kwargs)
-                return rpc_func(*args, **kwargs)
+                result = new_rpc_func(*args, **kwargs)
+                # If success, reorder so this working server becomes index 0
+                working_server = self.server_candidates.pop(self.current_server_index)
+                self.server_candidates.insert(0, working_server)
+                self.current_server_index = 0
+                return result
             except Exception as e:
                 print(f"[DEBUG] Server {srv_host}:{srv_port} also failed with: {e}")
 
@@ -204,8 +216,9 @@ class ChatClient:
 
         error_msg = ""
         try:
+            # pass the method name "Login" instead of self.stub.Login
             response = self.grpc_call(
-                self.stub.Login,
+                "Login",
                 chat_pb2.LoginRequest(username=username, password=password)
             )
             if "Welcome" in response.server_message:
@@ -243,8 +256,9 @@ class ChatClient:
 
         error_msg = ""
         try:
+            # pass "Register" as the method name
             response = self.grpc_call(
-                self.stub.Register,
+                "Register",
                 chat_pb2.RegisterRequest(username=username, password=password, confirm_password=confirm)
             )
             if "successful" in response.server_message.lower():
@@ -283,7 +297,7 @@ class ChatClient:
 
         try:
             responses = self.grpc_call(
-                self.stub.CheckMessages,
+                "CheckMessages",
                 request_generator(),
                 metadata=(('username', self.username),)
             )
@@ -296,20 +310,17 @@ class ChatClient:
                 pass
             else:
                 print("Error in check_messages_stream:", err)
-            # streaming ended -> do nothing or re-initiate?
         except Exception as e:
             print("Error in check_messages_stream:", e)
         finally:
             self.active_bidi = None
 
     def receive_messages_stream(self):
-        """
-        We auto re-initiate if the server goes down mid-stream
-        so the user doesn't have to type commands again
-        """
+        """We auto re-initiate if the server goes down mid-stream,
+           so the user doesn't have to type commands again."""
         try:
             responses = self.grpc_call(
-                self.stub.ReceiveMessages,
+                "ReceiveMessages",
                 chat_pb2.ReceiveRequest(username=self.username)
             )
             for resp in responses:
@@ -321,9 +332,6 @@ class ChatClient:
             threading.Thread(target=self.receive_messages_stream, daemon=True).start()
 
     def history_messages_stream(self):
-        """
-        If server fails mid-stream, we re-initiate from scratch
-        """
         self.active_bidi = "history"
         self.bidi_queue = queue.Queue()
 
@@ -335,7 +343,7 @@ class ChatClient:
 
         try:
             responses = self.grpc_call(
-                self.stub.History,
+                "History",
                 request_gen(),
                 metadata=(('username', self.username),)
             )
@@ -343,7 +351,6 @@ class ChatClient:
                 self.append_message(resp.server_message, sent_by_me=False)
         except Exception as e:
             print("Error in history_messages_stream:", e)
-            # re-initiate or do nothing
         finally:
             self.active_bidi = None
 
@@ -359,7 +366,7 @@ class ChatClient:
 
         try:
             responses = self.grpc_call(
-                self.stub.DeleteLastMessage,
+                "DeleteLastMessage",
                 request_gen(),
                 metadata=(('username', self.username),)
             )
@@ -382,7 +389,7 @@ class ChatClient:
 
         try:
             responses = self.grpc_call(
-                self.stub.DeactivateAccount,
+                "DeactivateAccount",
                 request_gen(),
                 metadata=(('username', self.username),)
             )
@@ -404,8 +411,8 @@ class ChatClient:
             return
         self.message_entry.delete(0, tk.END)
 
+        # If in a streaming 2-step conversation
         if self.active_bidi:
-            # If in a 2-step conversation
             self.bidi_queue.put(message)
             self.append_message(message, sent_by_me=True)
             return
@@ -413,7 +420,6 @@ class ChatClient:
         # Display user's typed message
         self.append_message(message, sent_by_me=True)
 
-        # Commands
         cmd_lower = message.lower()
         if cmd_lower == "check":
             threading.Thread(target=self.check_messages_stream, daemon=True).start()
@@ -428,7 +434,7 @@ class ChatClient:
             def do_search():
                 try:
                     response = self.grpc_call(
-                        self.stub.SearchUsers,
+                        "SearchUsers",
                         chat_pb2.SearchRequest(username=self.username),
                         metadata=(('username', self.username),)
                     )
@@ -446,7 +452,7 @@ class ChatClient:
             def do_logoff():
                 try:
                     response = self.grpc_call(
-                        self.stub.Logoff,
+                        "Logoff",
                         chat_pb2.LogoffRequest(username=self.username),
                         metadata=(('username', self.username),)
                     )
@@ -460,7 +466,7 @@ class ChatClient:
             def do_send_direct():
                 try:
                     response = self.grpc_call(
-                        self.stub.SendMessage,
+                        "SendMessage",
                         chat_pb2.GeneralMessage(command="sendmessage", message=message),
                         metadata=(('username', self.username),)
                     )
@@ -470,11 +476,11 @@ class ChatClient:
             threading.Thread(target=do_send_direct, daemon=True).start()
             return
 
-        # Default: send as a normal message
+        # Default: treat as a normal message
         def do_send():
             try:
                 response = self.grpc_call(
-                    self.stub.SendMessage,
+                    "SendMessage",
                     chat_pb2.GeneralMessage(command="sendmessage", message=message),
                     metadata=(('username', self.username),)
                 )
@@ -505,13 +511,15 @@ class ChatClient:
         try:
             if self.stub and self.username:
                 self.grpc_call(
-                    self.stub.Logoff,
+                    "Logoff",
                     chat_pb2.LogoffRequest(username=self.username)
                 )
         except:
             pass
         self.close_connection()
         self.root.destroy()
+    
+    
 
 if __name__ == "__main__":
     ChatClient()
