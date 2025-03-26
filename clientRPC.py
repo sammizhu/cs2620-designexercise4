@@ -9,9 +9,28 @@ import chat_pb2
 import chat_pb2_grpc
 import sys
 from grpc import RpcError, StatusCode
+import configparser
+
+def load_client_config(filename="client.ini"):
+    parser = configparser.ConfigParser()
+    parser.read(filename)
+    if not parser.has_section("client"):
+        raise Exception(f"[client] section not found in {filename}")
+
+    raw_servers = parser.get("client", "servers", fallback="")
+    if not raw_servers.strip():
+        raise Exception(f"No servers found in {filename} under [client] servers=")
+
+    # parse each "host:port" pair
+    server_candidates = []
+    for item in raw_servers.split(","):
+        item = item.strip()
+        host, port_str = item.split(":")
+        server_candidates.append((host.strip(), int(port_str.strip())))
+    return server_candidates
 
 class ChatClient:
-    def __init__(self):
+    def __init__(self, config_file="client.ini"):
         self.root = tk.Tk()
         self.root.title("Chat Client (gRPC)")
 
@@ -21,12 +40,7 @@ class ChatClient:
         self.active_bidi = None
         self.bidi_queue = None
 
-        # List of candidate servers for failover:
-        self.server_candidates = [
-            ("10.250.52.124", 65432),  # primary
-            ("10.250.52.124", 65433),  # secondary
-            ("10.250.52.124", 65434),  # tertiary
-        ]
+        self.server_candidates = load_client_config(config_file) # List of candidate servers for failover
         self.current_server_index = 0  # which server we are currently using
 
         # Build the frames/pages
@@ -45,9 +59,7 @@ class ChatClient:
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.mainloop()
 
-    # ----------------------------------------------------------------
     # Utility: connect to a server by index
-    # ----------------------------------------------------------------
     def connect_to_server(self, index):
         """Set self.stub to whichever server is at self.server_candidates[index]."""
         srv_host, srv_port = self.server_candidates[index]
@@ -55,9 +67,7 @@ class ChatClient:
         self.channel = grpc.insecure_channel(f"{srv_host}:{srv_port}")
         self.stub = chat_pb2_grpc.ChatStub(self.channel)
 
-    # ----------------------------------------------------------------
     # Utility: wrapper for all gRPC calls to handle failover
-    # ----------------------------------------------------------------
     def grpc_call(self, method_name, *args, **kwargs):
         """
         Attempt a gRPC call on the current stub. We pass the gRPC method name (string)
@@ -65,8 +75,9 @@ class ChatClient:
         or a similar error, move to the next server in a round-robin fashion.
         """
         # default short timeout if not given
-        if 'timeout' not in kwargs:
-            kwargs['timeout'] = 1.0
+        if method_name not in ("ReceiveMessages", "CheckMessages"):
+            if 'timeout' not in kwargs:
+                kwargs['timeout'] = 3.0 
 
         try:
             stub_method = getattr(self.stub, method_name)
@@ -117,9 +128,7 @@ class ChatClient:
 
         raise Exception("All servers are unavailable after full failover attempt.")
 
-    # ----------------------------------------------------------------
     # Build UI frames
-    # ----------------------------------------------------------------
     def build_welcome_frame(self):
         label = tk.Label(self.welcome_frame, text="Welcome to EST!\nPlease choose an option:", font=("Helvetica", 16))
         label.pack(pady=10)
@@ -170,9 +179,7 @@ class ChatClient:
         self.send_button = tk.Button(self.input_frame, text="Send", command=self.send_message)
         self.send_button.pack(side=tk.LEFT, padx=(5,0))
 
-    # ----------------------------------------------------------------
     # Navigation
-    # ----------------------------------------------------------------
     def show_welcome_page(self):
         self.login_frame.pack_forget()
         self.register_frame.pack_forget()
@@ -197,9 +204,7 @@ class ChatClient:
         self.register_frame.pack_forget()
         self.chat_frame.pack(fill="both", expand=True)
 
-    # ----------------------------------------------------------------
     # Login/Registration
-    # ----------------------------------------------------------------
     def handle_login(self):
         username = self.login_username_var.get().strip()
         password = self.login_password_var.get().strip()
@@ -274,9 +279,7 @@ class ChatClient:
 
         self.root.after(0, lambda: self.register_error_label.config(text=error_msg))
 
-    # ----------------------------------------------------------------
     # Message flows
-    # ----------------------------------------------------------------
     def process_messages_flow(self):
         # Check old messages, then start receiving new ones
         self.check_messages_stream()
@@ -402,9 +405,7 @@ class ChatClient:
         finally:
             self.active_bidi = None
 
-    # ----------------------------------------------------------------
     # Sending messages from GUI
-    # ----------------------------------------------------------------
     def send_message(self, event=None):
         message = self.message_entry.get().strip()
         if not message:
@@ -518,8 +519,13 @@ class ChatClient:
             pass
         self.close_connection()
         self.root.destroy()
-    
-    
+        
 
 if __name__ == "__main__":
-    ChatClient()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Chat Client with server config in a file.")
+    parser.add_argument("--config", default="client.ini", help="Path to client config (INI) file.")
+    args = parser.parse_args()
+
+    ChatClient(config_file=args.config)

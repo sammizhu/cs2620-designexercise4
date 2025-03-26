@@ -15,51 +15,11 @@
 - [Testing] (#testing)
 
 ## Introduction
-This is a simple chat application that consists of a **server** and a **client**. The server manages user authentication, messaging, and storing user messages. The client provides a graphical interface for users to communicate.
+This is a simple chat application that consists of a **server** and a **client**. The server manages user authentication, messaging, and storing user messages. The client provides a graphical interface for users to communicate. The product features 2-fault tolerance and persistent storage. The database of choice is Postgres.
 
-### mySQL Setup
-Check to see that your mySQL is configured to run on any host (nonlocally). First run `lsof -i :3306`. You should expect to see
-```
-mysqld  19607 your-username   22u  IPv4 0xb60f146791366c7b      0t0  TCP *:mysql (LISTEN)
-```
-If it shows `127.0.0.1:mysql (LISTEN)`, MySQL is only allowing local connections. **Proceed to the next step to fix this.**
-### Allow Remote Connections to MySQL
-#### Modify the MySQL Configuration File
-1. Open the MySQL config file: `nano /opt/homebrew/etc/my.cnf`
-2. Change `bind-address = 127.0.0.1` to `bind-address = 0.0.0.0`
-3. Save and exit (CTRL + X, then Y, then Enter).
-4. Restart MySQL: `brew services restart mysql`
-5. Check again: `lsof -i :3306`
-If the output shows `*:mysql (LISTEN)`, MySQL is now accepting remote connections.
-
-#### Grant Remote Access to a MySQL User
-1. Log into MySQL `mysql -u root -p`
-2. SELECT Host, User FROM mysql.user;
-    - If root@% or root@your-hostname is missing, add them:
-        ```
-        CREATE USER 'root'@'%' IDENTIFIED BY '';
-        GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
-        FLUSH PRIVILEGES;
-        EXIT;
-        ```
-        Note - replace '' with your password if you have one
-
-**Optional:** If MySQL is still not accessible remotely, open port 3306 and run `sudo pfctl -f /etc/pf.conf -e`
-
-#### Test Remote MySQL Connection
-Run `ipconfig getifaddr en0` to get your laptop's IP address. Then run `mysql -h {your_ip_address} -u root -p` and if successful, your MySQL now allows remote access!
     
 ## Server Setup
 ### Running the Server
-There are two servers. One running with JSON and the other via a custom wire protocol. 
--  To run the JSON version, run 
-   ```sh
-   python serverJson.py --host 10.250.52.124 --port 50000
-     ```
--  To run the custom wire protocol version, run 
-   ```sh
-   python serverCustom.py --host 10.250.52.124 --port 50000
-   ```
 -  To run the RPC version, run 
    ```sh
    python serverRPC.py --host 10.250.52.124 --port 50000
@@ -67,16 +27,6 @@ There are two servers. One running with JSON and the other via a custom wire pro
 
 ### Running the Client
 Note: Make sure you have tkinter installed. 
-There are two clients. One running with JSON and the other via a custom wire protocol. 
-Howver, if you run a JSON server, you must run a JSON client, vice versa.  
--  To run the JSON version, run 
-   ```sh
-   python clientJSON.py --host 10.250.52.124 --port 50000
-     ```
--  To run the custom wire protocol version, run 
-   ```sh
-   python clientCustom.py --host 10.250.52.124 --port 50000
-   ```
 -  To run the RPC version, run 
    ```sh
    python clientRPC.py --host 10.250.52.124 --port 50000
@@ -107,26 +57,13 @@ Howver, if you run a JSON server, you must run a JSON client, vice versa.
 | `@username message` | Sends a direct message to a user. |
 | `check` | Displays unread messages. |
 | `logoff` | Logs out from the server. |
+| `history` | See chat history with another user. |
 | `search` | Lists all registered users. |
 | `delete` | Deletes the last sent message. |
 | `deactivate` | Permanently deletes your account. |
 
 ## Testing
 ### Server
-ServerCustom:
-```
-coverage run --source=serverCustom testServerCustom.py
-coverage report -m
-```
-![alt text](img/serverCustom.png)
-
-ServerJSON:
-```
-coverage run --source=serverCustom testServerJSON.py
-coverage report -m
-```
-![alt text](img/serverJSON.png)
-
 ServerRPC:
 ```
 python serverRPC.py --host 10.250.52.124 --port 50000
@@ -136,20 +73,6 @@ coverage report -m
 ![alt text](img/serverRPC.png)
 
 ### Client 
-ClientCustom:
-```
-coverage run --source=clientCustom testClientCustom.py
-coverage report -m
-```
-![alt text](img/clientCustom.png)
-
-ClientJSON:
-```
-coverage run --source=clientJson testClientJSON.py
-coverage report -m
-```
-![alt text](img/clientJSON.png)
-
 ClientRPC:
 ```
   coverage run --source=clientRPC testClientRPC.py
